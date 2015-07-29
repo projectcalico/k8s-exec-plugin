@@ -55,3 +55,9 @@ docs/_build/
 
 # PyBuilder
 target/
+
+# Emacs temp
+*~
+
+# Pycharm stuff
+.idea/
