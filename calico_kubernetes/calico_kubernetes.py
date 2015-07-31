@@ -15,6 +15,7 @@ print("Using ETCD_AUTHORITY=%s" % os.environ[ETCD_AUTHORITY_ENV])
 
 from pycalico.datastore import IF_PREFIX, DatastoreClient
 from pycalico.util import generate_cali_interface_name, get_host_ips
+from pycalico.datastore_datatypes import Rules
 
 CALICOCTL_PATH = os.environ.get('CALICOCTL_PATH', '/usr/bin/calicoctl')
 print("Using CALICOCTL_PATH=%s" % CALICOCTL_PATH)
@@ -25,6 +26,7 @@ print("Using KUBE_API_ROOT=%s" % KUBE_API_ROOT)
 
 
 class NetworkPlugin(object):
+
     def __init__(self):
         self.pod_name = None
         self.docker_id = None
@@ -53,12 +55,47 @@ class NetworkPlugin(object):
         self.pod_name = pod_name
         self.docker_id = docker_id
 
+        if not self._datastore_client.profile_exists(self.pod_name):
+            print "A profile with name %s does not exist" % self.pod_name
+            sys.exit(1)
+
         print('Deleting container %s with profile %s' % 
             (self.pod_name, self.docker_id))
 
         # Remove the profile for the workload.
         self.calicoctl('container', 'remove', self.docker_id)
-        self.calicoctl('profile', 'remove', self.pod_name)
+
+        # Delete profile
+        self._datastore_client.remove_profile(self.pod_name)
+
+    def _configure_profile(self, endpoint):
+        """
+        Configure the calico profile for a pod.
+
+        Currently assumes one pod with each name.
+        """
+        print('Configuring Pod Profile')
+        profile_name = self.pod_name
+
+        if self._datastore_client.profile_exists(profile_name):
+            print "A profile with name %s already exists" % profile_name
+            sys.exit(1)
+        else:
+            self._datastore_client.create_profile(profile_name)
+
+        pod = self._get_pod_config()
+
+        self._apply_rules(profile_name)
+
+        self._apply_tags(profile_name, pod)
+
+        # Also set the profile for the workload.
+        print('Setting profile %s on endpoint %s' %
+              (profile_name, endpoint.endpoint_id))
+        self._datastore_client.set_profiles_on_endpoint(
+            profile_name, endpoint_id=endpoint.endpoint_id
+        )
+        print('Finished configuring profile.')
 
     def _configure_interface(self):
         """Configure the Calico interface for a pod.
@@ -153,28 +190,6 @@ class NetworkPlugin(object):
 
         # Clean up after ourselves (don't want to leak netns files)
         print(check_output(['rm', netns_file]))
-
-    def _configure_profile(self, endpoint):
-        """
-        Configure the calico profile for a pod.
-
-        Currently assumes one pod with each name.
-        """
-        print('Configuring Pod Profile')
-        profile_name = self.pod_name
-        self.calicoctl('profile', 'add', profile_name)
-        pod = self._get_pod_config()
-
-        self._apply_rules(profile_name)
-
-        self._apply_tags(profile_name, pod)
-
-        # Also set the profile for the workload.
-        print('Setting profile %s on endpoint %s' %
-              (profile_name, endpoint.endpoint_id))
-        self.calicoctl('endpoint', endpoint.endpoint_id,
-                       'profile', 'set', profile_name)
-        print('Finished configuring profile.')
 
     def _get_pod_ports(self, pod):
         """
@@ -300,11 +315,16 @@ class NetworkPlugin(object):
         :type profile_name: string
         :return:
         """
+        try:
+            profile = self._datastore_client.get_profile(profile_name)
+        except:
+            print "Could not apply rules. Profile not found."
+            sys.exit(1)
+
         rules = self._generate_rules()
         profile_json = self._generate_profile_json(profile_name, rules)
-
-        # Pipe the Profile JSON into the calicoctl command to update the rule.
-        self.calicoctl('profile', profile_name, 'rule', 'update', _in=profile_json)
+        profile.rules = Rules.from_json(profile_json)
+        self._datastore_client.profile_update_rules(profile)
         print('Finished applying rules.')
 
     def _apply_tags(self, profile_name, pod):
@@ -326,14 +346,18 @@ class NetworkPlugin(object):
             print('No labels found in pod %s' % pod)
             return
 
+        try:
+            profile = self._datastore_client.get_profile(profile_name)
+        except KeyError:
+            print('Could not find profile with name %s' % profile_name)
+            sys.exit(1)
+
         for k, v in labels.iteritems():
             tag = '%s_%s' % (k, v)
             tag = tag.replace('/', '_')
             print('Adding tag ' + tag)
-            try:
-                self.calicoctl('profile', profile_name, 'tag', 'add', tag)
-            except sh.ErrorReturnCode as e:
-                print('Could not create tag %s.\n%s' % (tag, e))
+            self._datastore_client.profile_update_tags(profile)
+
         print('Finished applying tags.')
 
 if __name__ == '__main__':
