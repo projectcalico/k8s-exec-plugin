@@ -114,7 +114,6 @@ class NetworkPlugin(object):
             print('No Valid IP Address Found for Host - cannot configure networking for pod %s' % (self.pod_name))
             sys.exit(1)
 
-
     def _read_docker_ip(self):
         """Get the IP for the pod's infra container."""
         ip = check_output([

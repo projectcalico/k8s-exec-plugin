@@ -14,7 +14,6 @@ kubernetesbuild.created: $(BUILD_FILES)
 	touch kubernetesbuild.created
 
 dist/calico_kubernetes: kubernetesbuild.created
-	# Build docker container
 	mkdir -p dist
 	chmod 777 `pwd`/dist
 	
@@ -38,7 +37,6 @@ clean:
 	find . -name '*.pyc' -exec rm -f {} +
 	-rm -rf dist
 	-docker rm -f calico-build
-	-docker rm -f calico-node
 	-docker rmi calico/kubernetes-build
 	-docker run -v /var/run/docker.sock:/var/run/docker.sock -v /var/lib/docker:/var/lib/docker --rm martin/docker-cleanup-volumes
 
