@@ -22,6 +22,7 @@ var/
 *.egg-info/
 .installed.cfg
 *.egg
+kubernetesbuild.created
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -55,3 +56,9 @@ docs/_build/
 
 # PyBuilder
 target/
+
+# Emacs temp
+*~
+
+# Pycharm stuff
+.idea/
