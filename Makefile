@@ -1,4 +1,4 @@
-.PHONEY: all binary
+.PHONY: all binary ut clean
 
 BUILD_DIR=build_calico_kubernetes
 BUILD_FILES=$(BUILD_DIR)/Dockerfile $(BUILD_DIR)/requirements.txt
@@ -8,13 +8,13 @@ all: binary test
 binary: dist/calico_kubernetes
 test: ut
 
+# Build a new docker image to be used by binary or tests
 kubernetesbuild.created: $(BUILD_FILES)
 	cd build_calico_kubernetes; docker build -t calico/kubernetes-build .
 	touch kubernetesbuild.created
 
 dist/calico_kubernetes: kubernetesbuild.created
 	# Build docker container
-	cd build_calico_kubernetes; docker build -t calico/kubernetes-build .
 	mkdir -p dist
 	chmod 777 `pwd`/dist
 	
@@ -39,7 +39,6 @@ clean:
 	-rm -rf dist
 	-docker rm -f calico-build
 	-docker rm -f calico-node
-	-docker rmi calico/node
 	-docker rmi calico/kubernetes-build
 	-docker run -v /var/run/docker.sock:/var/run/docker.sock -v /var/lib/docker:/var/lib/docker --rm martin/docker-cleanup-volumes
 

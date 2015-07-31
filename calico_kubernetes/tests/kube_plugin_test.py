@@ -96,12 +96,14 @@ class NetworkPluginTest(unittest.TestCase):
                 patch.object(self.plugin, '_get_node_ip',
                     autospec=True) as m_get_node_ip, \
                 patch.object(calico_kubernetes, 'check_call',
-                    autospec=True) as m_check_call:
+                    autospec=True) as m_check_call,\
+                patch.object(self.plugin, '_datastore_client',
+                    autospec=True) as m_datastore_client:
             # Set up mock objects
             m_read_docker.return_value = 'docker_ip'
             class ep:
                 endpoint_id = 'ep_id'
-            m_calicoctl.return_value = ep
+            m_datastore_client.get_endpoint.return_value = ep
             m_generate_cali_interface_name.return_value = 'interface_name'
             m_get_node_ip.return_value = '1.2.3.4'
 
@@ -113,6 +115,7 @@ class NetworkPluginTest(unittest.TestCase):
             m_delete_docker_interface.assert_called_once_with()
             m_calicoctl.assert_called_once_with(
                 'container', 'add', self.plugin.docker_id, 'docker_ip', 'eth0')
+            m_datastore_client.get_endpoint.assert_called_once_with(workload_id=self.plugin.docker_id)
             m_generate_cali_interface_name.assert_called_once_with(IF_PREFIX, 'ep_id')
             m_get_node_ip.assert_called_once_with()
             m_check_call.assert_called_once_with(

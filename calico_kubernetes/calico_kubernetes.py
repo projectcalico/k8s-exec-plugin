@@ -13,7 +13,7 @@ if ETCD_AUTHORITY_ENV not in os.environ:
     os.environ[ETCD_AUTHORITY_ENV] = 'kubernetes-master:6666'
 print("Using ETCD_AUTHORITY=%s" % os.environ[ETCD_AUTHORITY_ENV])
 
-from pycalico.datastore import IF_PREFIX
+from pycalico.datastore import IF_PREFIX, DatastoreClient
 from pycalico.util import generate_cali_interface_name, get_host_ips
 
 CALICOCTL_PATH = os.environ.get('CALICOCTL_PATH', '/usr/bin/calicoctl')
@@ -28,6 +28,7 @@ class NetworkPlugin(object):
     def __init__(self):
         self.pod_name = None
         self.docker_id = None
+        self._datastore_client = DatastoreClient()
         self.calicoctl = sh.Command(CALICOCTL_PATH).bake(_env=os.environ)
 
     def create(self, pod_name, docker_id):
@@ -75,7 +76,8 @@ class NetworkPlugin(object):
         container_ip = self._read_docker_ip()
         self._delete_docker_interface()
         print('Configuring Calico network interface')
-        ep = self.calicoctl('container', 'add', self.docker_id, container_ip, 'eth0')
+        self.calicoctl('container', 'add', self.docker_id, container_ip, 'eth0')
+        ep = self._datastore_client.get_endpoint(workload_id=self.docker_id)
         interface_name = generate_cali_interface_name(IF_PREFIX, ep.endpoint_id)
         node_ip = self._get_node_ip()
         print('Adding IP %s to interface %s' % (node_ip, interface_name))
