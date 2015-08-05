@@ -16,8 +16,10 @@ import json
 import unittest
 from mock import patch, Mock, call
 from subprocess import CalledProcessError
+import docker
 from calico_kubernetes import calico_kubernetes
 from pycalico.datastore import IF_PREFIX
+from pycalico.datastore_datatypes import Profile
 
 
 class NetworkPluginTest(unittest.TestCase):
@@ -68,7 +70,11 @@ class NetworkPluginTest(unittest.TestCase):
             m_sys_exit.assert_called_once_with(1)
 
     def test_delete(self):
-        with patch.object(self.plugin, 'calicoctl', autospec=True) as m_calicoctl:
+        with patch.object(self.plugin, '_datastore_client', autospec=True) as m_datastore_client, \
+                patch.object(self.plugin, 'calicoctl', autospec=True) as m_calicoctl:
+            # Set up mock objs
+            m_datastore_client.profile_exists.return_value = True
+
             # Set up args
             pod_name = 'pod1'
             docker_id = 13
@@ -77,12 +83,10 @@ class NetworkPluginTest(unittest.TestCase):
             self.plugin.delete(pod_name, docker_id)
 
             # Assert
-            m_calicoctl.assert_has_calls([
-                call('container', 'remove', docker_id),
-                call('profile', 'remove', pod_name)
-            ])
             self.assertEqual(self.plugin.pod_name, pod_name)
             self.assertEqual(self.plugin.docker_id, docker_id)
+            m_calicoctl.assert_called_once_with('container', 'remove', docker_id)
+            m_datastore_client.remove_profile(pod_name)
 
     def test_configure_interface(self):
         with patch.object(self.plugin, '_read_docker_ip',
@@ -98,7 +102,9 @@ class NetworkPluginTest(unittest.TestCase):
                 patch.object(calico_kubernetes, 'check_call',
                     autospec=True) as m_check_call,\
                 patch.object(self.plugin, '_datastore_client',
-                    autospec=True) as m_datastore_client:
+                    autospec=True) as m_datastore_client,\
+                patch.object(self.plugin, '_docker_client', \
+                    autospec=True) as m_docker_client:
             # Set up mock objects
             m_read_docker.return_value = 'docker_ip'
             class ep:
@@ -115,7 +121,8 @@ class NetworkPluginTest(unittest.TestCase):
             m_delete_docker_interface.assert_called_once_with()
             m_calicoctl.assert_called_once_with(
                 'container', 'add', self.plugin.docker_id, 'docker_ip', 'eth0')
-            m_datastore_client.get_endpoint.assert_called_once_with(workload_id=self.plugin.docker_id)
+            m_datastore_client.get_endpoint.assert_called_once_with(
+                workload_id=m_docker_client.inspect_container().__getitem__())
             m_generate_cali_interface_name.assert_called_once_with(IF_PREFIX, 'ep_id')
             m_get_node_ip.assert_called_once_with()
             m_check_call.assert_called_once_with(
@@ -174,8 +181,8 @@ class NetworkPluginTest(unittest.TestCase):
             m_check_output.assert_has_calls(calls)
 
     def test_configure_profile(self):
-        with patch.object(self.plugin, 'calicoctl',
-                    autospec=True) as m_calicoctl, \
+        with patch.object(self.plugin, '_datastore_client',
+                    autospec=True) as m_datastore_client, \
                 patch.object(self.plugin, '_get_pod_config',
                     autospec=True) as m_get_pod_config, \
                 patch.object(self.plugin, '_apply_rules',
@@ -183,25 +190,25 @@ class NetworkPluginTest(unittest.TestCase):
                 patch.object(self.plugin, '_apply_tags',
                     autospec=True) as m_apply_tags:
             # Set up mock objects
+            m_datastore_client.profile_exists.return_value = False
             m_endpoint = Mock()
             m_endpoint.endpoint_id = 'ep_id'
             m_get_pod_config.return_value = 'pod'
 
             # Set up class members
-            self.plugin.pod_name = 'podname'
+            profile_name = 'podname'
+            self.plugin.pod_name = profile_name
 
             # Call method under test
             self.plugin._configure_profile(m_endpoint)
 
             # Assert
-            m_calicoctl_call_1 = call('profile', 'add', 'podname')
-            m_calicoctl_call_2 = call('endpoint', 'ep_id', 'profile',
-                                        'set', self.plugin.pod_name)
-            m_calicoctl_calls = [m_calicoctl_call_1,m_calicoctl_call_2]
-            m_calicoctl.assert_has_calls(m_calicoctl_calls)
+            m_datastore_client.profile_exists.assert_called_once_with(profile_name)
+            m_datastore_client.create_profile.assert_called_once_with(profile_name)
             m_get_pod_config.assert_called_once_with()
-            m_apply_rules.assert_called_once_with('podname')
-            m_apply_tags.assert_called_once_with('podname', 'pod')
+            m_apply_rules.assert_called_once_with(profile_name)
+            m_apply_tags.assert_called_once_with(profile_name, 'pod')
+            m_datastore_client.set_profiles_on_endpoint(profile_name, endpoint_id='ep_id')
 
     def test_get_pod_ports(self):
         # Initialize pod dictionary and expected outcome
@@ -348,36 +355,47 @@ class NetworkPluginTest(unittest.TestCase):
                     autospec=True) as m_generate_rules, \
                 patch.object(self.plugin, '_generate_profile_json',
                     autospec=True) as m_generate_profile_json, \
-                patch.object(self.plugin, 'calicoctl',
-                    autospec=True) as m_calicoctl:
+                patch.object(self.plugin, '_datastore_client',
+                    autospec=True) as m_datastore_client, \
+                patch('calico_kubernetes.calico_kubernetes.Rules',
+                      autospec=True) as m_Rules:
             # Set up mock objects
+            m_profile = Mock()
+            m_datastore_client.get_profile.return_value = m_profile
             m_generate_rules.return_value = 'rules'
             m_generate_profile_json.return_value = 'json_profile'
-            profile = Mock()
 
             # Call method under test
-            self.plugin._apply_rules(profile)
+            self.plugin._apply_rules('profile')
 
             # Assert
+            m_datastore_client.get_profile.assert_called_once_with('profile')
             m_generate_rules.assert_called_once_with()
-            m_generate_profile_json.assert_called_once_with(profile, 'rules')
-            m_calicoctl.assert_called_once_with('profile', profile, 'rule',
-                                                'update', _in='json_profile')
+            m_generate_profile_json.assert_called_once_with('profile', 'rules')
+            m_Rules.from_json.assert_called_once_with('json_profile')
+            m_datastore_client.profile_update_rules(m_profile)
 
     def test_apply_tags(self):
-        with patch.object(self.plugin, 'calicoctl', autospec=True) as m_calicoctl:
+        with patch.object(self.plugin, '_datastore_client', autospec=True) as m_datastore_client:
             # Intialize args
             pod = {'metadata': {'labels': {1: 1, 2: 2}}}
             profile_name = 'profile_name'
 
+            # Set up mock objs
+            m_profile = Mock(spec=Profile, name = profile_name)
+            m_profile.tags = set()
+            m_datastore_client.get_profile.return_value = m_profile
+            check_tags = set()
+            check_tags.add('1_1')
+            check_tags.add('2_2')
+
             # Call method under test
-            self.plugin._apply_tags(profile_name,pod)
+            self.plugin._apply_tags(profile_name, pod)
 
             # Assert
-            call_1 = call('profile', 'profile_name', 'tag', 'add', '1_1')
-            call_2 = call('profile', 'profile_name', 'tag', 'add', '2_2')
-            calls = [call_1, call_2]
-            m_calicoctl.assert_has_calls(calls)
+            m_datastore_client.get_profile.assert_called_once_with(profile_name)
+            m_datastore_client.profile_update_tags.assert_called_once_with(m_profile)
+            self.assertEqual(m_profile.tags, check_tags)
 
     def test_apply_tags_error(self):
         with patch.object(self.plugin, 'calicoctl',autospec=True) as m_calicoctl:
