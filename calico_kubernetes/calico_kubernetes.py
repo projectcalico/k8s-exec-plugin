@@ -85,7 +85,7 @@ class NetworkPlugin(object):
         print('Configuring Pod Profile: %s' % profile_name)
 
         if self._datastore_client.profile_exists(profile_name):
-            print "Error: Profile with name %s already exists, exiting." % profile_name
+            print "ERROR: Profile with name %s already exists, exiting." % profile_name
             sys.exit(1)
         else:
             self._datastore_client.create_profile(profile_name)
@@ -100,7 +100,7 @@ class NetworkPlugin(object):
         print('Setting profile %s on endpoint %s' %
               (profile_name, endpoint.endpoint_id))
         self._datastore_client.set_profiles_on_endpoint(
-            profile_name, endpoint_id=endpoint.endpoint_id
+            [profile_name], endpoint_id=endpoint.endpoint_id
         )
         print('Finished configuring profile.')
 
@@ -283,7 +283,7 @@ class NetworkPlugin(object):
 
         # kube-system services need to be accessed by all namespaces
         if namespace == "kube-system" :
-            print "using kube-system, allow all"
+            print "Pod %s belongs to the kube-system namespace - allow all inbound and outbound traffic" % (pod)
             return [["allow"]], [["allow"]]
 
         inbound_rules = [
@@ -308,66 +308,50 @@ class NetworkPlugin(object):
             for rule in rules.split(";"):
                 args = rule.split(" ")
 
-                # Replace labels with tags
-                # key=value -> namespace_key_value
-                # TODO: account for improper formatting
+                # Labels are declared in the annotations with the format 'label X=Y' 
+                # These must be converted into format 'tag NAMSPACE_X_Y' to be parsed by calicoctl.
                 if 'label' in args:
+                    # Replace arg 'label' with arg 'tag'
                     label_ind = args.index('label')
                     args[label_ind] = 'tag'
+
+                    # Split given label 'key=value' into components 'key', 'value'
                     label = args[label_ind + 1]
                     key, value = label.split('=')
+
+                    # Compose Calico tag out of key, value, namespace components
                     tag = self._label_to_tag(key, value, namespace)
                     args[label_ind + 1] = tag
 
-                # Remove null args and add to rule list
+                # Remove empty strings and add to rule list
                 args = filter(None, args)
                 inbound_rules.append(args)
 
         return inbound_rules, outbound_rules
 
-    def _generate_profile_json(self, profile_name, rules):
-        """
-        DEPRECIATED: Not used in current semantic annotation format
-        Given a list of of Calico rules, generate a Calico Profile JSON blob
-        implementing those rules.
-
-        :param profile_name: The name of the Calico profile
-        :type profile_name: string
-        :param rules: A tuple of (inbound, outbound) Calico rules
-        :type rules: tuple
-        :return: A JSON blob ready to be loaded by calicoctl
-        :rtype: str
-        """
-        inbound, outbound = rules
-        profile = {
-            'id': profile_name,
-            'inbound_rules': inbound,
-            'outbound_rules': outbound,
-        }
-        profile_json = json.dumps(profile, indent=2)
-        print('Final profile "%s":\n%s' % (profile_name, profile_json))
-        return profile_json
-
     def _apply_rules(self, profile_name, pod):
         """
         Generate a new profile with the default 'allow all' rules.
 
-        :param profile_name: The profile to update
+        :param profile_name: The profile to update, pod to modify
         :type profile_name: string
+        :type pod: dict()
         :return:
         """
         try:
             profile = self._datastore_client.get_profile(profile_name)
         except:
-            print("Error: Could not apply rules. Profile not found: %s, exiting" % profile_name)
+            print("ERROR: Could not apply rules. Profile not found: %s, exiting" % profile_name)
             sys.exit(1)
 
         inbound_rules, outbound_rules = self._generate_rules(pod)
 
         print "Removing Default Rules"
 
-        # TODO: This method is append-only, not profile replacement, we need to remove default rules
-        # TODO: remove calicoctl calls (x5)
+        # TODO: This method is append-only, not profile replacement, we need to replace calicoctl calls
+        #       but necessary functions are not available in pycalico ATM
+
+        # Remove default rules. Assumes 2 in, 1 out.
         try:
             self.calicoctl('profile', profile_name, 'rule', 'remove', 'inbound', '--at=2')
             self.calicoctl('profile', profile_name, 'rule', 'remove', 'inbound', '--at=1')
@@ -375,26 +359,31 @@ class NetworkPlugin(object):
         except sh.ErrorReturnCode as e:
             print('Could not delete default rules for profile %s (assumed 2 inbound, 1 outbound)\n%s' % (profile_name, e))
 
+        # Call calicoctl to populate inbound rules 
         for rule in inbound_rules:
             print 'applying inbound rule \n%s' % rule
             try:
                 self.calicoctl('profile', profile_name, 'rule', 'add', 'inbound', rule)
             except sh.ErrorReturnCode as e:
-                print('Could not create rule %s.\n%s' % (rule, e))
-
+                print('ERROR: Could not apply inbound rule %s.\n%s' % (rule, e))
+        
+        # Call calicoctl to populate outbound rules 
         for rule in outbound_rules:
             print 'applying outbound rule \n%s' % rule
             try:
                 self.calicoctl('profile', profile_name, 'rule', 'add', 'outbound', rule)
             except sh.ErrorReturnCode as e:
-                print('Could not create rule %s.\n%s' % (rule, e))
+                print('ERROR: Could not apply outbound rule %s.\n%s' % (rule, e))
 
         print('Finished applying rules.')
 
     def _apply_tags(self, profile_name, pod):
         """
-        Extract the label KV pairs from the pod config, and apply each as a
-        tag in the pod's profile.
+        In addition to Calico's default pod_name tag,
+        Add tags generated from Kubernetes Labels and Namespace
+            Ex. labels: {key:value} -> tags+= namespace_key_value
+        Add tag for namespace
+            Ex. namespace: default -> tags+= namespace_default
 
         :param profile_name: The name of the Calico profile.
         :type profile_name: string
@@ -416,6 +405,8 @@ class NetworkPlugin(object):
         if ns_tag:
             print('Adding tag %s' % ns_tag)
             profile.tags.add(ns_tag)
+        else:
+            print('WARNING: Namespace tag cannot be generated')
 
         # Create tags from labels
         labels = self._get_metadata(pod, 'labels')
@@ -439,7 +430,7 @@ class NetworkPlugin(object):
         try:
             val = pod['metadata'][key]
         except KeyError:
-            print('No %s found in pod %s' % (key, pod))
+            print('WARNING: No %s found in pod %s' % (key, pod))
             return None
 
         print("%s of pod %s:\n%s" % (key, pod, val))
@@ -450,8 +441,12 @@ class NetworkPlugin(object):
         Calico can only handle 3 special chars, '_.-'
         This function uses regex sub to replace SCs with '_'
         """
-        escape_seq = '_'
-        return re.sub('[^a-zA-Z0-9\.-]', escape_seq, unescaped_string)
+        # Character to replace symbols
+        swap_char = '_'
+        # If swap_char is in string, double it.
+        unescaped_string = re.sub(swap_char, "%s%s" % (swap_char, swap_char), unescaped_string)
+        # Substitute all invalid chars.
+        return re.sub('[^a-zA-Z0-9\.-]', swap_char, unescaped_string)
 
     def _get_namespace_and_tag(self, pod):
         namespace = self._get_metadata(pod, 'namespace')
@@ -461,9 +456,9 @@ class NetworkPlugin(object):
     def _label_to_tag(self, label_key, label_value, namespace):
         """
         Labels are key-value pairs, tags are single strings. This function handles that translation
-        1) concatenate key and value with '='
-        2) prepend a pod's namespace followed by '/' if available
-        3) replace special characters with urllib-style escape sequence
+        1) Concatenate key and value with '='
+        2) Prepend a pod's namespace followed by '/' if available
+        3) Escape the generated string so it is Calico compatible
         :param label_key: key to label
         :param label_value: value to given key for a label
         :param namespace: Namespace string, input None if not available
