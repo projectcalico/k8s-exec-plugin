@@ -40,15 +40,19 @@ class NetworkPluginTest(unittest.TestCase):
             m_configure_interface.return_value = 'endpt_id'
 
             # Set up args
+            namespace = 'ns'
             pod_name = 'pod1'
             docker_id = 123456789101112
+            profile_name = 'ns_pod1_123456789101'
 
             # Call method under test
-            self.plugin.create(pod_name, docker_id)
+            self.plugin.create(namespace, pod_name, docker_id)
 
             # Assert
+            self.assertEqual(namespace, self.plugin.namespace)
             self.assertEqual(pod_name, self.plugin.pod_name)
             self.assertEqual(docker_id, self.plugin.docker_id)
+            self.assertEqual(profile_name, self.plugin.profile_name)
             m_configure_interface.assert_called_once_with()
             m_configure_profile.assert_called_once_with('endpt_id')
 
@@ -60,11 +64,12 @@ class NetworkPluginTest(unittest.TestCase):
             m_configure_interface.side_effect = CalledProcessError(1,'','')
 
             # Set up args
+            namespace = 'ns'
             pod_name = 'pod1'
             docker_id = 13
 
             # Call method under test
-            self.plugin.create(pod_name, docker_id)
+            self.plugin.create(namespace, pod_name, docker_id)
 
             # Assert
             m_sys_exit.assert_called_once_with(1)
@@ -76,17 +81,21 @@ class NetworkPluginTest(unittest.TestCase):
             m_datastore_client.profile_exists.return_value = True
 
             # Set up args
+            namespace = 'ns'
             pod_name = 'pod1'
-            docker_id = 123456789123
+            docker_id = 123456789101112
+            profile_name = 'ns_pod1_123456789101'
 
             # Call method under test
-            self.plugin.delete(pod_name, docker_id)
+            self.plugin.delete(namespace, pod_name, docker_id)
 
             # Assert
-            self.assertEqual(self.plugin.pod_name, pod_name)
-            self.assertEqual(self.plugin.docker_id, docker_id)
+            self.assertEqual(namespace, self.plugin.namespace)
+            self.assertEqual(pod_name, self.plugin.pod_name)
+            self.assertEqual(docker_id, self.plugin.docker_id)
+            self.assertEqual(profile_name, self.plugin.profile_name)
             m_calicoctl.assert_called_once_with('container', 'remove', docker_id)
-            m_datastore_client.remove_profile('pod1_123456789123')
+            m_datastore_client.remove_profile(profile_name)
 
     def test_configure_interface(self):
         with patch.object(self.plugin, '_read_docker_ip',
@@ -183,8 +192,8 @@ class NetworkPluginTest(unittest.TestCase):
     def test_configure_profile(self):
         with patch.object(self.plugin, '_datastore_client',
                     autospec=True) as m_datastore_client, \
-                patch.object(self.plugin, '_get_namespace_and_tag',
-                    autospec=True) as m_get_namespace_and_tag, \
+                patch.object(self.plugin, '_get_namespace_tag',
+                    autospec=True) as m_get_namespace_tag, \
                 patch.object(self.plugin, '_get_pod_config',
                     autospec=True) as m_get_pod_config, \
                 patch.object(self.plugin, '_apply_rules',
@@ -196,7 +205,7 @@ class NetworkPluginTest(unittest.TestCase):
             m_endpoint = Mock()
             m_endpoint.endpoint_id = 'ep_id'
             m_get_pod_config.return_value = 'pod'
-            m_get_namespace_and_tag.return_value = 'namespace', 'tag'
+            m_get_namespace_tag.return_value = 'tag'
 
             # Set up class members
             self.plugin.pod_name = 'pod_name'
@@ -209,8 +218,8 @@ class NetworkPluginTest(unittest.TestCase):
             m_datastore_client.profile_exists.assert_called_once_with(self.plugin.profile_name)
             m_datastore_client.create_profile.assert_called_once_with(self.plugin.profile_name)
             m_get_pod_config.assert_called_once_with()
-            m_apply_rules.assert_called_once_with(self.plugin.profile_name, 'pod')
-            m_apply_tags.assert_called_once_with(self.plugin.profile_name, 'pod')
+            m_apply_rules.assert_called_once_with('pod')
+            m_apply_tags.assert_called_once_with('pod')
             m_datastore_client.set_profiles_on_endpoint(self.plugin.profile_name, endpoint_id='ep_id')
 
     def test_get_pod_ports(self):
@@ -245,14 +254,15 @@ class NetworkPluginTest(unittest.TestCase):
         with patch.object(self.plugin, '_get_api_path',
                     autospec=True) as m_get_api_path:
             # Set up mock object
-            pod1 = {'metadata': {'name': 'pod-1'}}
-            pod2 = {'metadata': {'name': 'pod-2'}}
-            pod3 = {'metadata': {'name': 'pod-3'}}
+            pod1 = {'metadata': {'namespace': 'a', 'name': 'pod-1'}}
+            pod2 = {'metadata': {'namespace': 'a', 'name': 'pod-2'}}
+            pod3 = {'metadata': {'namespace': 'a', 'name': 'pod-3'}}
             pods = [pod1, pod2, pod3]
             m_get_api_path.return_value = pods
 
             # Set up class member
             self.plugin.pod_name = 'pod-2'
+            self.plugin.namespace = 'a'
 
             # Call method under test
             return_val = self.plugin._get_pod_config()
@@ -346,17 +356,20 @@ class NetworkPluginTest(unittest.TestCase):
             m_datastore_client.get_profile.return_value = m_profile
             m_generate_rules.return_value = ([["allow"]], [["allow"]])
             m_calicoctl.return_value = None
-            pod = {'metadata': {'profile': 'name'}}
+            profile_name = 'a_b_c'
+            self.plugin.profile_name = profile_name
+            pod = {'metadata': {'namespace': 'a', 'profile': 'name'}}
+            self.plugin.namespace = pod['metadata']['namespace']
 
             # Call method under test
-            self.plugin._apply_rules('profile', pod)
+            self.plugin._apply_rules(pod)
 
             # Assert
-            m_datastore_client.get_profile.assert_called_once_with('profile')
+            m_datastore_client.get_profile.assert_called_once_with(profile_name)
             m_calicoctl.assert_has_calls([
-                call('profile', 'profile', 'rule', 'remove', 'inbound', '--at=2'),
-                call('profile', 'profile', 'rule', 'remove', 'inbound', '--at=1'),
-                call('profile', 'profile', 'rule', 'remove', 'outbound', '--at=1')
+                call('profile', profile_name, 'rule', 'remove', 'inbound', '--at=2'),
+                call('profile', profile_name, 'rule', 'remove', 'inbound', '--at=1'),
+                call('profile', profile_name, 'rule', 'remove', 'outbound', '--at=1')
                 ])
             m_generate_rules.assert_called_once_with(pod)
             m_datastore_client.profile_update_rules(m_profile)
@@ -365,6 +378,7 @@ class NetworkPluginTest(unittest.TestCase):
         with patch.object(self.plugin, '_datastore_client', autospec=True) as m_datastore_client:
             # Intialize args
             pod = {'metadata': {'namespace': 'a', 'labels': {1: 2, "2/3": "4_5"}}}
+            self.plugin.namespace = pod['metadata']['namespace']
             self.plugin.profile_name = 'profile_name'
 
             # Set up mock objs
@@ -378,7 +392,7 @@ class NetworkPluginTest(unittest.TestCase):
             check_tags.add('a_2_3_4__5')
 
             # Call method under test
-            self.plugin._apply_tags(self.plugin.profile_name, pod)
+            self.plugin._apply_tags(pod)
 
             # Assert
             m_datastore_client.get_profile.assert_called_once_with(self.plugin.profile_name)
@@ -394,7 +408,7 @@ class NetworkPluginTest(unittest.TestCase):
             m_datastore_client.get_profile.return_value = Mock()
 
             # Call method under test
-            self.plugin._apply_tags(self.plugin.profile_name, pod)
+            self.plugin._apply_tags(pod)
 
             # Assert
             self.assertFalse(m_calicoctl.called)

@@ -35,6 +35,7 @@ class NetworkPlugin(object):
     def __init__(self):
         self.pod_name = None
         self.profile_name = None
+        self.namespace = None
         self.docker_id = None
         self._datastore_client = DatastoreClient()
         self.calicoctl = sh.Command(CALICOCTL_PATH).bake(_env=os.environ)
@@ -42,13 +43,14 @@ class NetworkPlugin(object):
             version=DOCKER_VERSION,
             base_url=os.getenv("DOCKER_HOST", "unix://var/run/docker.sock"))
 
-    def create(self, pod_name, docker_id):
+    def create(self, namespace, pod_name, docker_id):
         """"Create a pod."""
         # Calicoctl does not support the '-' character in iptables rule names.
         # TODO: fix Felix to support '-' characters.
         self.pod_name = pod_name
         self.docker_id = docker_id
-        self.profile_name = "%s_%s" % (self.pod_name, str(self.docker_id)[:12])
+        self.namespace = namespace
+        self.profile_name = "%s_%s_%s" % (self.namespace, self.pod_name, str(self.docker_id)[:12])
 
         print('Configuring docker container %s' % self.docker_id)
 
@@ -60,11 +62,12 @@ class NetworkPlugin(object):
                 e.returncode, e.output, e))
             sys.exit(1)
 
-    def delete(self, pod_name, docker_id):
+    def delete(self, namespace, pod_name, docker_id):
         """Cleanup after a pod."""
         self.pod_name = pod_name
         self.docker_id = docker_id
-        self.profile_name = "%s_%s" % (self.pod_name, str(self.docker_id)[:12])
+        self.namespace = namespace
+        self.profile_name = "%s_%s_%s" % (self.namespace, self.pod_name, str(self.docker_id)[:12])
 
         print('Deleting container %s with profile %s' %
             (self.docker_id, self.profile_name))
@@ -94,9 +97,9 @@ class NetworkPlugin(object):
         else:
             self._datastore_client.create_profile(self.profile_name)
 
-        self._apply_rules(self.profile_name, pod)
+        self._apply_rules(pod)
 
-        self._apply_tags(self.profile_name, pod)
+        self._apply_tags(pod)
 
         # Also set the profile for the workload.
         print('Setting profile %s on endpoint %s' %
@@ -224,7 +227,8 @@ class NetworkPlugin(object):
 
         for pod in pods:
             print('Processing pod %s' % pod)
-            if pod['metadata']['name'].replace('/', '_') == self.pod_name:
+            if pod['metadata']['namespace'].replace('/', '_') == self.namespace and \
+                pod['metadata']['name'].replace('/', '_') == self.pod_name:
                 this_pod = pod
                 break
         else:
@@ -281,14 +285,14 @@ class NetworkPlugin(object):
         outbound list of rules (arg lists)
         """
 
-        namespace, ns_tag = self._get_namespace_and_tag(pod)
+        ns_tag = self._get_namespace_tag(pod)
 
         # kube-system services need to be accessed by all namespaces
-        if namespace == "kube-system" :
+        if self.namespace == "kube-system" :
             print "Pod %s belongs to the kube-system namespace - allow all inbound and outbound traffic" % (pod)
             return [["allow"]], [["allow"]]
 
-        if namespace:
+        if self.namespace:
             inbound_rules = [["allow", "from", "tag", ns_tag]]
             outbound_rules = [["allow"]]
         else:
@@ -320,8 +324,8 @@ class NetworkPlugin(object):
                     label = args[label_ind + 1]
                     key, value = label.split('=')
 
-                    # Compose Calico tag out of key, value, namespace components
-                    tag = self._label_to_tag(key, value, namespace)
+                    # Compose Calico tag out of key, value components
+                    tag = self._label_to_tag(key, value)
                     args[label_ind + 1] = tag
 
                 # Remove empty strings and add to rule list
@@ -330,7 +334,7 @@ class NetworkPlugin(object):
 
         return inbound_rules, outbound_rules
 
-    def _apply_rules(self, profile_name, pod):
+    def _apply_rules(self, pod):
         """
         Generate a rules for a given profile based on annotations.
         1) Remove Calicoctl default rules
@@ -341,16 +345,14 @@ class NetworkPlugin(object):
             If no policy in annotations, allow from pod's Namespace
             Outbound policy should allow all traffic
 
-        :param profile_name: The profile to update
-        :type profile_name: string
         :param pod: pod info to parse
         :type pod: dict()
         :return:
         """
         try:
-            profile = self._datastore_client.get_profile(profile_name)
+            profile = self._datastore_client.get_profile(self.profile_name)
         except:
-            print("ERROR: Could not apply rules. Profile not found: %s, exiting" % profile_name)
+            print("ERROR: Could not apply rules. Profile not found: %s, exiting" % self.profile_name)
             sys.exit(1)
 
         inbound_rules, outbound_rules = self._generate_rules(pod)
@@ -362,17 +364,17 @@ class NetworkPlugin(object):
 
         # Remove default rules. Assumes 2 in, 1 out.
         try:
-            self.calicoctl('profile', profile_name, 'rule', 'remove', 'inbound', '--at=2')
-            self.calicoctl('profile', profile_name, 'rule', 'remove', 'inbound', '--at=1')
-            self.calicoctl('profile', profile_name, 'rule', 'remove', 'outbound', '--at=1')
+            self.calicoctl('profile', self.profile_name, 'rule', 'remove', 'inbound', '--at=2')
+            self.calicoctl('profile', self.profile_name, 'rule', 'remove', 'inbound', '--at=1')
+            self.calicoctl('profile', self.profile_name, 'rule', 'remove', 'outbound', '--at=1')
         except sh.ErrorReturnCode as e:
-            print('Could not delete default rules for profile %s (assumed 2 inbound, 1 outbound)\n%s' % (profile_name, e))
+            print('Could not delete default rules for profile %s (assumed 2 inbound, 1 outbound)\n%s' % (self.profile_name, e))
 
         # Call calicoctl to populate inbound rules
         for rule in inbound_rules:
             print 'applying inbound rule \n%s' % rule
             try:
-                self.calicoctl('profile', profile_name, 'rule', 'add', 'inbound', rule)
+                self.calicoctl('profile', self.profile_name, 'rule', 'add', 'inbound', rule)
             except sh.ErrorReturnCode as e:
                 print('ERROR: Could not apply inbound rule %s.\n%s' % (rule, e))
 
@@ -380,13 +382,13 @@ class NetworkPlugin(object):
         for rule in outbound_rules:
             print 'applying outbound rule \n%s' % rule
             try:
-                self.calicoctl('profile', profile_name, 'rule', 'add', 'outbound', rule)
+                self.calicoctl('profile', self.profile_name, 'rule', 'add', 'outbound', rule)
             except sh.ErrorReturnCode as e:
                 print('ERROR: Could not apply outbound rule %s.\n%s' % (rule, e))
 
         print('Finished applying rules.')
 
-    def _apply_tags(self, profile_name, pod):
+    def _apply_tags(self, pod):
         """
         In addition to Calico's default pod_name tag,
         Add tags generated from Kubernetes Labels and Namespace
@@ -394,8 +396,8 @@ class NetworkPlugin(object):
         Add tag for namespace
             Ex. namespace: default -> tags+= namespace_default
 
-        :param profile_name: The name of the Calico profile.
-        :type profile_name: string
+        :param self.profile_name: The name of the Calico profile.
+        :type self.profile_name: string
         :param pod: The config dictionary for the pod being created.
         :type pod: dict
         :return:
@@ -403,13 +405,13 @@ class NetworkPlugin(object):
         print('Applying tags')
 
         try:
-            profile = self._datastore_client.get_profile(profile_name)
+            profile = self._datastore_client.get_profile(self.profile_name)
         except KeyError:
-            print('Error: Could not apply tags. Profile %s could not be found. Exiting' % profile_name)
+            print('Error: Could not apply tags. Profile %s could not be found. Exiting' % self.profile_name)
             sys.exit(1)
 
         # Grab namespace and create a tag if it exists.
-        namespace, ns_tag = self._get_namespace_and_tag(pod)
+        ns_tag = self._get_namespace_tag(pod)
 
         if ns_tag:
             print('Adding tag %s' % ns_tag)
@@ -421,7 +423,7 @@ class NetworkPlugin(object):
         labels = self._get_metadata(pod, 'labels')
         if labels:
             for k, v in labels.iteritems():
-                tag = self._label_to_tag(k, v, namespace)
+                tag = self._label_to_tag(k, v)
                 print('Adding tag ' + tag)
                 profile.tags.add(tag)
         else:
@@ -452,20 +454,21 @@ class NetworkPlugin(object):
         """
         # Character to replace symbols
         swap_char = '_'
+
         # If swap_char is in string, double it.
         unescaped_string = re.sub(swap_char, "%s%s" % (swap_char, swap_char), unescaped_string)
+
         # Substitute all invalid chars.
         return re.sub('[^a-zA-Z0-9\.\_\-]', swap_char, unescaped_string)
 
-    def _get_namespace_and_tag(self, pod):
+    def _get_namespace_tag(self, pod):
         """
         Pull metadata for namespace and return it and a generated NS tag
         """
-        namespace = self._get_metadata(pod, 'namespace')
-        ns_tag = self._escape_chars('%s=%s' % ('namespace', namespace)) if namespace else None
-        return namespace, ns_tag
+        ns_tag = self._escape_chars('%s=%s' % ('namespace', self.namespace))
+        return ns_tag
 
-    def _label_to_tag(self, label_key, label_value, namespace):
+    def _label_to_tag(self, label_key, label_value):
         """
         Labels are key-value pairs, tags are single strings. This function handles that translation
         1) Concatenate key and value with '='
@@ -479,7 +482,7 @@ class NetworkPlugin(object):
         :rtype string
         """
         tag = '%s=%s' % (label_key, label_value)
-        tag = '%s/%s' % (namespace, tag) if namespace else tag
+        tag = '%s/%s' % (self.namespace, tag)
         tag = self._escape_chars(tag)
         return tag
 
@@ -502,11 +505,12 @@ if __name__ == '__main__':
         print('No initialization work to perform')
     else:
         # These args only present for setup/teardown.
+        namespace = sys.argv[2].replace('/', '_')
         pod_name = sys.argv[3].replace('/', '_')
         docker_id = sys.argv[4]
         if mode == 'setup':
             print('Executing Calico pod-creation hook')
-            NetworkPlugin().create(pod_name, docker_id)
+            NetworkPlugin().create(namespace, pod_name, docker_id)
         elif mode == 'teardown':
             print('Executing Calico pod-deletion hook')
-            NetworkPlugin().delete(pod_name, docker_id)
+            NetworkPlugin().delete(namespace, pod_name, docker_id)
