@@ -286,13 +286,12 @@ class NetworkPlugin(object):
             print "Pod %s belongs to the kube-system namespace - allow all inbound and outbound traffic" % (pod)
             return [["allow"]], [["allow"]]
 
-        inbound_rules = [
-            ["allow", "from", "tag", ns_tag]
-        ]
-
-        outbound_rules = [
-            ["allow"]
-        ]
+        if namespace:
+            inbound_rules = [["allow", "from", "tag", ns_tag]]
+            outbound_rules = [["allow"]]
+        else:
+            inbound_rules = [["allow"]]
+            outbound_rules = [["allow"]]
 
         print("Getting Policy Rules from Annotation of pod %s" % pod)
 
@@ -308,7 +307,7 @@ class NetworkPlugin(object):
             for rule in rules.split(";"):
                 args = rule.split(" ")
 
-                # Labels are declared in the annotations with the format 'label X=Y' 
+                # Labels are declared in the annotations with the format 'label X=Y'
                 # These must be converted into format 'tag NAMSPACE_X_Y' to be parsed by calicoctl.
                 if 'label' in args:
                     # Replace arg 'label' with arg 'tag'
@@ -331,10 +330,18 @@ class NetworkPlugin(object):
 
     def _apply_rules(self, profile_name, pod):
         """
-        Generate a new profile with the default 'allow all' rules.
+        Generate a rules for a given profile based on annotations.
+        1) Remove Calicoctl default rules
+        2) Create new profiles based on annotations, and establish new defaults
 
-        :param profile_name: The profile to update, pod to modify
+        Exceptions:
+            If namespace = kube-system (internal kube services), allow all traffic
+            If no policy in annotations, allow from pod's Namespace
+            Outbound policy should allow all traffic
+
+        :param profile_name: The profile to update
         :type profile_name: string
+        :param pod: pod info to parse
         :type pod: dict()
         :return:
         """
@@ -359,15 +366,15 @@ class NetworkPlugin(object):
         except sh.ErrorReturnCode as e:
             print('Could not delete default rules for profile %s (assumed 2 inbound, 1 outbound)\n%s' % (profile_name, e))
 
-        # Call calicoctl to populate inbound rules 
+        # Call calicoctl to populate inbound rules
         for rule in inbound_rules:
             print 'applying inbound rule \n%s' % rule
             try:
                 self.calicoctl('profile', profile_name, 'rule', 'add', 'inbound', rule)
             except sh.ErrorReturnCode as e:
                 print('ERROR: Could not apply inbound rule %s.\n%s' % (rule, e))
-        
-        # Call calicoctl to populate outbound rules 
+
+        # Call calicoctl to populate outbound rules
         for rule in outbound_rules:
             print 'applying outbound rule \n%s' % rule
             try:
@@ -446,7 +453,7 @@ class NetworkPlugin(object):
         # If swap_char is in string, double it.
         unescaped_string = re.sub(swap_char, "%s%s" % (swap_char, swap_char), unescaped_string)
         # Substitute all invalid chars.
-        return re.sub('[^a-zA-Z0-9\.-]', swap_char, unescaped_string)
+        return re.sub('[^a-zA-Z0-9\.\_\-]', swap_char, unescaped_string)
 
     def _get_namespace_and_tag(self, pod):
         namespace = self._get_metadata(pod, 'namespace')

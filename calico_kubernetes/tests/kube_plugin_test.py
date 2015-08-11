@@ -206,7 +206,7 @@ class NetworkPluginTest(unittest.TestCase):
             m_datastore_client.profile_exists.assert_called_once_with(profile_name)
             m_datastore_client.create_profile.assert_called_once_with(profile_name)
             m_get_pod_config.assert_called_once_with()
-            m_apply_rules.assert_called_once_with(profile_name)
+            m_apply_rules.assert_called_once_with(profile_name, 'pod')
             m_apply_tags.assert_called_once_with(profile_name, 'pod')
             m_datastore_client.set_profiles_on_endpoint(profile_name, endpoint_id='ep_id')
 
@@ -322,72 +322,57 @@ class NetworkPluginTest(unittest.TestCase):
             self.assertEqual(return_val, 'correct_return')
 
     def test_generate_rules(self):
-        # Call method under test
-        return_val = self.plugin._generate_rules()
+        pod = {'metadata': {'profile': 'name'}}
 
+
+        # Call method under test empty annotations/namespace
+        return_val = self.plugin._generate_rules(pod)
         # Assert
-        self.assertEqual(return_val, ([{'action': 'allow'}], [{'action': 'allow'}]))
-
-    def test_generate_profile_json(self):
-        with patch('calico_kubernetes.calico_kubernetes.json.dumps',
-                   autospec=True) as m_json:
-            # Set up mock objects
-            m_json.return_value = 'correct_return'
-
-            # Initialize args
-            rules = ('inbound', 'outbound')
-            profile_name = 'profile_name'
-
-            # Call method under test
-            return_val = self.plugin._generate_profile_json(
-                profile_name, rules)
-
-            # Assert
-            m_json.assert_called_once_with(
-                {'id': 'profile_name',
-                'inbound_rules': 'inbound',
-                'outbound_rules': 'outbound'},
-                 indent=2)
-            self.assertEqual(return_val, 'correct_return')
+        self.assertEqual(return_val, ([["allow"]], [["allow"]]))
 
     def test_apply_rules(self):
         with patch.object(self.plugin, '_generate_rules',
                     autospec=True) as m_generate_rules, \
-                patch.object(self.plugin, '_generate_profile_json',
-                    autospec=True) as m_generate_profile_json, \
                 patch.object(self.plugin, '_datastore_client',
                     autospec=True) as m_datastore_client, \
-                patch('calico_kubernetes.calico_kubernetes.Rules',
-                      autospec=True) as m_Rules:
+                patch.object(self.plugin, 'calicoctl',
+                    autospec=True) as m_calicoctl:
+
             # Set up mock objects
             m_profile = Mock()
             m_datastore_client.get_profile.return_value = m_profile
-            m_generate_rules.return_value = 'rules'
-            m_generate_profile_json.return_value = 'json_profile'
+            m_generate_rules.return_value = ([["allow"]], [["allow"]])
+            m_calicoctl.return_value = None
+            pod = {'metadata': {'profile': 'name'}}
 
             # Call method under test
-            self.plugin._apply_rules('profile')
+            self.plugin._apply_rules('profile', pod)
 
             # Assert
             m_datastore_client.get_profile.assert_called_once_with('profile')
-            m_generate_rules.assert_called_once_with()
-            m_generate_profile_json.assert_called_once_with('profile', 'rules')
-            m_Rules.from_json.assert_called_once_with('json_profile')
+            m_calicoctl.assert_has_calls([
+                call('profile', 'profile', 'rule', 'remove', 'inbound', '--at=2'),
+                call('profile', 'profile', 'rule', 'remove', 'inbound', '--at=1'),
+                call('profile', 'profile', 'rule', 'remove', 'outbound', '--at=1')
+                ])
+            m_generate_rules.assert_called_once_with(pod)
             m_datastore_client.profile_update_rules(m_profile)
 
     def test_apply_tags(self):
         with patch.object(self.plugin, '_datastore_client', autospec=True) as m_datastore_client:
             # Intialize args
-            pod = {'metadata': {'labels': {1: 1, 2: 2}}}
+            pod = {'metadata': {'namespace': 'a', 'labels': {1: 2, "2/3": "4_5"}}}
             profile_name = 'profile_name'
 
             # Set up mock objs
             m_profile = Mock(spec=Profile, name = profile_name)
             m_profile.tags = set()
             m_datastore_client.get_profile.return_value = m_profile
+
             check_tags = set()
-            check_tags.add('1_1')
-            check_tags.add('2_2')
+            check_tags.add('namespace_a')
+            check_tags.add('a_1_2')
+            check_tags.add('a_2_3_4__5')
 
             # Call method under test
             self.plugin._apply_tags(profile_name, pod)
@@ -398,10 +383,12 @@ class NetworkPluginTest(unittest.TestCase):
             self.assertEqual(m_profile.tags, check_tags)
 
     def test_apply_tags_error(self):
-        with patch.object(self.plugin, 'calicoctl',autospec=True) as m_calicoctl:
+        with patch.object(self.plugin, '_datastore_client', autospec=True) as m_datastore_client, \
+                patch.object(self.plugin, 'calicoctl',autospec=True) as m_calicoctl:
             # Intialize args
             pod = {}
             profile_name = 'profile_name'
+            m_datastore_client.get_profile.return_value = Mock()
 
             # Call method under test
             self.plugin._apply_tags(profile_name, pod)
