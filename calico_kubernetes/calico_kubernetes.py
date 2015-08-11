@@ -34,6 +34,7 @@ class NetworkPlugin(object):
 
     def __init__(self):
         self.pod_name = None
+        self.profile_name = None
         self.docker_id = None
         self._datastore_client = DatastoreClient()
         self.calicoctl = sh.Command(CALICOCTL_PATH).bake(_env=os.environ)
@@ -47,6 +48,7 @@ class NetworkPlugin(object):
         # TODO: fix Felix to support '-' characters.
         self.pod_name = pod_name
         self.docker_id = docker_id
+        self.profile_name = "%s_%s" % (self.pod_name, str(self.docker_id)[:12])
 
         print('Configuring docker container %s' % self.docker_id)
 
@@ -62,18 +64,19 @@ class NetworkPlugin(object):
         """Cleanup after a pod."""
         self.pod_name = pod_name
         self.docker_id = docker_id
+        self.profile_name = "%s_%s" % (self.pod_name, str(self.docker_id)[:12])
 
         print('Deleting container %s with profile %s' %
-            (self.docker_id, self.pod_name))
+            (self.docker_id, self.profile_name))
 
         # Remove the profile for the workload.
         self.calicoctl('container', 'remove', self.docker_id)
 
         # Delete profile
         try:
-            self._datastore_client.remove_profile(self.pod_name)
+            self._datastore_client.remove_profile(self.profile_name)
         except:
-            print "Cannot remove profile %s; Profile cannot be found." % self.pod_name
+            print "Cannot remove profile %s; Profile cannot be found." % self.profile_name
 
     def _configure_profile(self, endpoint):
         """
@@ -82,26 +85,24 @@ class NetworkPlugin(object):
         Currently assumes one pod with each name.
         """
         pod = self._get_pod_config()
-        namespace = self._get_namespace_and_tag(pod)[0]
 
-        profile_name = "%s_%s" % (namespace, self.pod_name)
-        print('Configuring Pod Profile: %s' % profile_name)
+        print('Configuring Pod Profile: %s' % self.profile_name)
 
-        if self._datastore_client.profile_exists(profile_name):
-            print "ERROR: Profile with name %s already exists, exiting." % profile_name
+        if self._datastore_client.profile_exists(self.profile_name):
+            print "ERROR: Profile with name %s already exists, exiting." % self.profile_name
             sys.exit(1)
         else:
-            self._datastore_client.create_profile(profile_name)
+            self._datastore_client.create_profile(self.profile_name)
 
-        self._apply_rules(profile_name, pod)
+        self._apply_rules(self.profile_name, pod)
 
-        self._apply_tags(profile_name, pod)
+        self._apply_tags(self.profile_name, pod)
 
         # Also set the profile for the workload.
         print('Setting profile %s on endpoint %s' %
-              (profile_name, endpoint.endpoint_id))
+              (self.profile_name, endpoint.endpoint_id))
         self._datastore_client.set_profiles_on_endpoint(
-            [profile_name], endpoint_id=endpoint.endpoint_id
+            [self.profile_name], endpoint_id=endpoint.endpoint_id
         )
         print('Finished configuring profile.')
 
