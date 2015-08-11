@@ -81,7 +81,10 @@ class NetworkPlugin(object):
 
         Currently assumes one pod with each name.
         """
-        profile_name = self.pod_name
+        pod = self._get_pod_config()
+        namespace = self._get_namespace_and_tag(pod)[0]
+
+        profile_name = "%s_%s" % (namespace, self.pod_name)
         print('Configuring Pod Profile: %s' % profile_name)
 
         if self._datastore_client.profile_exists(profile_name):
@@ -89,8 +92,6 @@ class NetworkPlugin(object):
             sys.exit(1)
         else:
             self._datastore_client.create_profile(profile_name)
-
-        pod = self._get_pod_config()
 
         self._apply_rules(profile_name, pod)
 
@@ -436,7 +437,7 @@ class NetworkPlugin(object):
         """
         try:
             val = pod['metadata'][key]
-        except KeyError:
+        except KeyError, TypeError:
             print('WARNING: No %s found in pod %s' % (key, pod))
             return None
 
@@ -456,6 +457,9 @@ class NetworkPlugin(object):
         return re.sub('[^a-zA-Z0-9\.\_\-]', swap_char, unescaped_string)
 
     def _get_namespace_and_tag(self, pod):
+        """
+        Pull metadata for namespace and return it and a generated NS tag
+        """
         namespace = self._get_metadata(pod, 'namespace')
         ns_tag = self._escape_chars('%s=%s' % ('namespace', namespace)) if namespace else None
         return namespace, ns_tag

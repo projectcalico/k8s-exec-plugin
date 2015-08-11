@@ -183,6 +183,8 @@ class NetworkPluginTest(unittest.TestCase):
     def test_configure_profile(self):
         with patch.object(self.plugin, '_datastore_client',
                     autospec=True) as m_datastore_client, \
+                patch.object(self.plugin, '_get_namespace_and_tag',
+                    autospec=True) as m_get_namespace_and_tag, \
                 patch.object(self.plugin, '_get_pod_config',
                     autospec=True) as m_get_pod_config, \
                 patch.object(self.plugin, '_apply_rules',
@@ -194,10 +196,11 @@ class NetworkPluginTest(unittest.TestCase):
             m_endpoint = Mock()
             m_endpoint.endpoint_id = 'ep_id'
             m_get_pod_config.return_value = 'pod'
+            m_get_namespace_and_tag.return_value = 'namespace', 'tag'
 
             # Set up class members
-            profile_name = 'podname'
-            self.plugin.pod_name = profile_name
+            self.plugin.pod_name = 'pod_name'
+            profile_name = 'namespace_pod_name'
 
             # Call method under test
             self.plugin._configure_profile(m_endpoint)
