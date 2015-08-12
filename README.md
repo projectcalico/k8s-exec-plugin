@@ -1,6 +1,4 @@
 # Calico Networking for Kubernetes
-> NOTE: This repository is currently a work in progress and is not guarenteed to be stable.  For stable Kubernetes support and documentation, please see the Kubernetes section in the [calico-docker](https://github.com/projectcalico/calico-docker/tree/master/docs/kubernetes) repo. 
-
 Calico can be integrated into Kubernetes using the native Kubernetes network plugin API.  Calico is particularly suitable for large Kubernetes deployments on bare metal or private clouds, where the performance and complexity costs of overlay networks can become significant. It can also be used in public clouds.
 
 For more information on Project Calico see http://www.projectcalico.org/learn/.
