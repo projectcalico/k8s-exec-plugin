@@ -2,18 +2,23 @@
 import json
 import os
 import sys
+import re
+import socket
 from docker import Client
 from docker.errors import APIError
 from subprocess import check_output, CalledProcessError, check_call
 import requests
-from urllib import quote
 import sh
-import re
+from netaddr import IPAddress, AddrFormatError
+from pycalico import netns
 from pycalico.datastore import IF_PREFIX, DatastoreClient
 from pycalico.util import generate_cali_interface_name, get_host_ips
-from pycalico.datastore_datatypes import Rules
+from pycalico.ipam import IPAMClient
+from pycalico.datastore_errors import PoolNotFound
 
 DOCKER_VERSION = "1.16"
+ORCHESTRATOR_ID = "docker"
+HOSTNAME = socket.gethostname()
 
 ETCD_AUTHORITY_ENV = "ETCD_AUTHORITY"
 if ETCD_AUTHORITY_ENV not in os.environ:
@@ -37,7 +42,8 @@ class NetworkPlugin(object):
         self.profile_name = None
         self.namespace = None
         self.docker_id = None
-        self._datastore_client = DatastoreClient()
+
+        self._datastore_client = IPAMClient()
         self.calicoctl = sh.Command(CALICOCTL_PATH).bake(_env=os.environ)
         self._docker_client = Client(
             version=DOCKER_VERSION,
@@ -73,7 +79,7 @@ class NetworkPlugin(object):
             (self.docker_id, self.profile_name))
 
         # Remove the profile for the workload.
-        self.calicoctl('container', 'remove', self.docker_id)
+        self._container_remove(HOSTNAME, ORCHESTRATOR_ID)
 
         # Delete profile
         try:
@@ -122,12 +128,16 @@ class NetworkPlugin(object):
         4) Assign the node's IP to the host end of the veth pair (required for
            compatibility with kube-proxy REDIRECT iptables rules).
         """
+        # Set up parameters
+        container_pid = self._get_container_pid(self.docker_id)
         container_ip = self._read_docker_ip()
-        container_id = self._get_container_id(self.docker_id)
+        interface = 'eth0'
+
         self._delete_docker_interface()
         print('Configuring Calico network interface')
-        self.calicoctl('container', 'add', self.docker_id, container_ip, '--interface=eth0')
-        ep = self._datastore_client.get_endpoint(workload_id=container_id)
+        ep = self._container_add(
+            container_pid, container_ip, interface, HOSTNAME, ORCHESTRATOR_ID
+        )
         interface_name = generate_cali_interface_name(IF_PREFIX, ep.endpoint_id)
         node_ip = self._get_node_ip()
         print('Adding IP %s to interface %s' % (node_ip, interface_name))
@@ -147,6 +157,118 @@ class NetworkPlugin(object):
         print('Finished configuring network interface')
         return ep
 
+    def _container_add(self, pid, ip, interface, hostname, orchestrator_id):
+        """
+        Add a container (on this host) to Calico networking with the given IP.
+        """
+        # Check if the container already exists. If it does, exit.
+        try:
+            _ = self._datastore_client.get_endpoint(
+                hostname=hostname,
+                orchestrator_id=orchestrator_id,
+                workload_id=self.docker_id
+            )
+        except KeyError:
+            # Calico doesn't know about this container.  Continue.
+            pass
+        else:
+            print("This container has already been configured with Calico Networking.")
+            sys.exit(1)
+
+        # Obtain information from Docker Client and validate container state
+        self._validate_container_state(self.docker_id)
+
+        # Assign ip address through IPAM Client
+        try:
+            ip_assigned = self._datastore_client.assign_address(None, ip)
+        except PoolNotFound:
+            print "ERROR: IP address %s does not belong to any configured pools."\
+                  " Exiting." % ip
+            sys.exit(1)
+        else:
+            if not ip_assigned:
+               print "ERROR: Failed to assign IP address %s. Exiting." % ip
+               sys.exit(1)
+
+        # Create Endpoint object
+        try:
+            ep = self._datastore_client.create_endpoint(hostname, orchestrator_id,
+                                                        self.docker_id, [ip])
+        except AddrFormatError:
+            print "This node is not configured for IPv%d. Unassigning IP "\
+                  "address %s then exiting."  % ip.version, ip
+            self._datastore_client.unassign_address(None, ip)
+            sys.exit(1)
+
+        # Create the veth, move into the container namespace, add the IP and
+        # set up the default routes.
+        ep.mac = ep.provision_veth(pid, interface)
+        self._datastore_client.set_endpoint(ep)
+
+        # Let the caller know what endpoint was created.
+        return ep
+
+    def _container_remove(self, hostname, orchestrator_id):
+        """
+        Remove the indicated container on this host from Calico networking
+        """
+        # Find the endpoint ID. We need this to find any ACL rules
+        try:
+            endpoint = self._datastore_client.get_endpoint(
+                hostname=hostname,
+                orchestrator_id=orchestrator_id,
+                workload_id=self.docker_id
+            )
+        except KeyError:
+            print("Container %s doesn't contain any endpoints" % self.docker_id)
+            sys.exit(1)
+
+        # Remove any IP address assignments that this endpoint has
+        for net in endpoint.ipv4_nets | endpoint.ipv6_nets:
+            assert(net.size == 1)
+            self._datastore_client.unassign_address(None, net.ip)
+
+        # Remove the endpoint
+        netns.remove_veth(endpoint.name)
+
+        # Remove the container from the datastore.
+        self._datastore_client.remove_workload(hostname, orchestrator_id, self.docker_id)
+
+        print("Removed Calico interface from %s" % self.docker_id)
+
+    def _validate_container_state(self, container_name):
+        info = self._get_container_info(container_name)
+
+        # Check the container is actually running.
+        if not info["State"]["Running"]:
+            print("The container is not currently running.")
+            sys.exit(1)
+
+        # We can't set up Calico if the container shares the host namespace.
+        if info["HostConfig"]["NetworkMode"] == "host":
+            print("Can't add the container to Calico because it is running NetworkMode = host.")
+            sys.exit(1)
+
+    def _get_container_info(self, container_name):
+        try:
+            info = self._docker_client.inspect_container(container_name)
+        except APIError as e:
+            if e.response.status_code == 404:
+                print("Error: Container %s was not found. Exiting." % container_name)
+            else:
+                print(e.message)
+            sys.exit(1)
+        return info
+
+    def _get_container_pid(self, container_name):
+        return self._get_container_info(container_name)["State"]["Pid"]
+
+    def _read_docker_ip(self):
+        """Get the IP for the pod's infra container."""
+        ip = self._get_container_info(self.docker_id)["NetworkSettings"]["IPAddress"]
+        print('Docker-assigned IP was %s' % ip)
+        return IPAddress(ip)
+
     def _get_node_ip(self):
         """
         Determine the IP for the host node.
@@ -164,29 +286,12 @@ class NetworkPlugin(object):
             print('Error: No Valid IP Address Found for Host - cannot configure networking for pod %s. Exiting' % (self.pod_name))
             sys.exit(1)
 
-    def _read_docker_ip(self):
-        """Get the IP for the pod's infra container."""
-        ip = check_output([
-            'docker', 'inspect', '-format', '{{ .NetworkSettings.IPAddress }}',
-            self.docker_id
-        ])
-        # Clean trailing whitespace (expect a '\n' at least).
-        ip = ip.strip()
-
-        print('Docker-assigned IP was %s' % ip)
-        return ip
-
     def _delete_docker_interface(self):
         """Delete the existing veth connecting to the docker bridge."""
         print('Deleting docker interface eth0')
 
         # Get the PID of the container.
-        pid = check_output([
-            'docker', 'inspect', '-format', '{{ .State.Pid }}',
-            self.docker_id
-        ])
-        # Clean trailing whitespace (expect a '\n' at least).
-        pid = pid.strip()
+        pid = str(self._get_container_pid(self.docker_id))
         print('Container %s running with PID %s' % (self.docker_id, pid))
 
         # Set up a link to the container's netns.
@@ -485,17 +590,6 @@ class NetworkPlugin(object):
         tag = '%s/%s' % (self.namespace, tag)
         tag = self._escape_chars(tag)
         return tag
-
-    def _get_container_id(self, container_name):
-        try:
-            info = self._docker_client.inspect_container(container_name)
-        except APIError as e:
-            if e.response.status_code == 404:
-                print("Error: Could not get container ID for %s. Exiting." % container_name)
-            else:
-                print(e.message)
-            sys.exit(1)
-        return info["Id"]
 
 if __name__ == '__main__':
     print('Args: %s' % sys.argv)
