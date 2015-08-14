@@ -591,7 +591,6 @@ class NetworkPlugin(object):
         tag = self._escape_chars(tag)
         return tag
 
-
 if __name__ == '__main__':
     print('Args: %s' % sys.argv)
     mode = sys.argv[1]

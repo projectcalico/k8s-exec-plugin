@@ -26,6 +26,7 @@ TEST_HOST = calico_kubernetes.HOSTNAME
 TEST_ORCH_ID = calico_kubernetes.ORCHESTRATOR_ID
 
 
+
 class NetworkPluginTest(unittest.TestCase):
 
     def setUp(self):
@@ -117,7 +118,6 @@ class NetworkPluginTest(unittest.TestCase):
                     autospec=True) as m_get_node_ip, \
                 patch.object(calico_kubernetes, 'check_call',
                     autospec=True) as m_check_call:
-
             # Set up mock objects
             m_get_container_pid.return_value = 'container_pid'
             m_read_docker_ip.return_value = IPAddress('1.1.1.1')
@@ -473,6 +473,7 @@ class NetworkPluginTest(unittest.TestCase):
             m_datastore_client.profile_exists.assert_called_once_with(profile_name)
             self.assertFalse(m_datastore_client.create_profile.called)
 
+
     def test_get_pod_ports(self):
         # Initialize pod dictionary and expected outcome
         pod = {'spec': {'containers': [{'ports': [1, 2, 3]},{'ports': [4, 5]}]}}
@@ -607,9 +608,9 @@ class NetworkPluginTest(unittest.TestCase):
     def test_generate_rules(self):
         pod = {'metadata': {'profile': 'name'}}
 
-
         # Call method under test empty annotations/namespace
         return_val = self.plugin._generate_rules(pod)
+
         # Assert
         self.assertEqual(return_val, ([["allow"]], [["allow"]]))
 
