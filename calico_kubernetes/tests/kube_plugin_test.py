@@ -15,9 +15,15 @@
 import json
 import unittest
 from mock import patch, Mock, call
+from netaddr import IPAddress, IPNetwork
 from subprocess import CalledProcessError
+from docker.errors import APIError
 from calico_kubernetes import calico_kubernetes
 from pycalico.datastore import IF_PREFIX
+from pycalico.datastore_datatypes import Profile, Endpoint
+
+TEST_HOST = calico_kubernetes.HOSTNAME
+TEST_ORCH_ID = calico_kubernetes.ORCHESTRATOR_ID
 
 
 class NetworkPluginTest(unittest.TestCase):
@@ -38,15 +44,19 @@ class NetworkPluginTest(unittest.TestCase):
             m_configure_interface.return_value = 'endpt_id'
 
             # Set up args
+            namespace = 'ns'
             pod_name = 'pod1'
-            docker_id = 13
+            docker_id = 123456789101112
+            profile_name = 'ns_pod1_123456789101'
 
             # Call method under test
-            self.plugin.create(pod_name, docker_id)
+            self.plugin.create(namespace, pod_name, docker_id)
 
             # Assert
+            self.assertEqual(namespace, self.plugin.namespace)
             self.assertEqual(pod_name, self.plugin.pod_name)
             self.assertEqual(docker_id, self.plugin.docker_id)
+            self.assertEqual(profile_name, self.plugin.profile_name)
             m_configure_interface.assert_called_once_with()
             m_configure_profile.assert_called_once_with('endpt_id')
 
@@ -58,72 +68,290 @@ class NetworkPluginTest(unittest.TestCase):
             m_configure_interface.side_effect = CalledProcessError(1,'','')
 
             # Set up args
+            namespace = 'ns'
             pod_name = 'pod1'
             docker_id = 13
 
             # Call method under test
-            self.plugin.create(pod_name, docker_id)
+            self.plugin.create(namespace, pod_name, docker_id)
 
             # Assert
             m_sys_exit.assert_called_once_with(1)
 
     def test_delete(self):
-        with patch.object(self.plugin, 'calicoctl', autospec=True) as m_calicoctl:
+        with patch.object(self.plugin, '_datastore_client', autospec=True) as m_datastore_client, \
+                patch.object(self.plugin, '_docker_client', autospec=True) as m_docker_client, \
+                patch.object(self.plugin, '_container_remove', autospec=True) as m_container_remove:
+            # Set up mock objs
+            workload_id = 19
+            m_datastore_client.profile_exists.return_value = True
+
             # Set up args
+            namespace = 'ns'
             pod_name = 'pod1'
-            docker_id = 13
+            docker_id = 123456789101112
+            profile_name = 'ns_pod1_123456789101'
 
             # Call method under test
-            self.plugin.delete(pod_name, docker_id)
+            self.plugin.delete(namespace, pod_name, docker_id)
 
             # Assert
-            m_calicoctl.assert_has_calls([
-                call('container', 'remove', docker_id),
-                call('profile', 'remove', pod_name)
-            ])
-            self.assertEqual(self.plugin.pod_name, pod_name)
-            self.assertEqual(self.plugin.docker_id, docker_id)
+            m_container_remove.assert_called_once_with(TEST_HOST, TEST_ORCH_ID)
+            self.assertEqual(namespace, self.plugin.namespace)
+            self.assertEqual(pod_name, self.plugin.pod_name)
+            self.assertEqual(docker_id, self.plugin.docker_id)
+            self.assertEqual(profile_name, self.plugin.profile_name)
+            m_datastore_client.remove_profile(profile_name)
 
     def test_configure_interface(self):
         with patch.object(self.plugin, '_read_docker_ip',
-                    autospec=True) as m_read_docker, \
+                    autospec=True) as m_read_docker_ip, \
+                patch.object(self.plugin, '_get_container_pid', autospec=True) as m_get_container_pid, \
                 patch.object(self.plugin, '_delete_docker_interface',
                     autospec=True) as m_delete_docker_interface, \
-                patch.object(self.plugin, 'calicoctl',
-                    autospec=True) as m_calicoctl, \
+                patch.object(self.plugin, '_container_add',
+                    autospec=True) as m_container_add, \
                 patch.object(calico_kubernetes, 'generate_cali_interface_name',
                     autospec=True) as m_generate_cali_interface_name, \
                 patch.object(self.plugin, '_get_node_ip',
                     autospec=True) as m_get_node_ip, \
                 patch.object(calico_kubernetes, 'check_call',
-                    autospec=True) as m_check_call,\
-                patch.object(self.plugin, '_datastore_client',
-                    autospec=True) as m_datastore_client:
+                    autospec=True) as m_check_call:
+
             # Set up mock objects
-            m_read_docker.return_value = 'docker_ip'
-            class ep:
-                endpoint_id = 'ep_id'
-            m_datastore_client.get_endpoint.return_value = ep
+            m_get_container_pid.return_value = 'container_pid'
+            m_read_docker_ip.return_value = IPAddress('1.1.1.1')
+            endpoint = Endpoint(TEST_HOST, TEST_ORCH_ID, '1234', '5678',
+                                'active', 'mac')
+            m_container_add.return_value = endpoint
             m_generate_cali_interface_name.return_value = 'interface_name'
             m_get_node_ip.return_value = '1.2.3.4'
+
+            # Set up args
+            self.plugin.pod_name = 'pod1'
+            container_name = 'container1'
+            self.plugin.docker_id = container_name
 
             # Call method under test
             return_val = self.plugin._configure_interface()
 
             # Assert
-            m_read_docker.assert_called_once_with()
+            m_get_container_pid.assert_called_once_with(container_name)
+            m_read_docker_ip.assert_called_once_with()
             m_delete_docker_interface.assert_called_once_with()
-            m_calicoctl.assert_called_once_with(
-                'container', 'add', self.plugin.docker_id, 'docker_ip', 'eth0')
-            m_datastore_client.get_endpoint.assert_called_once_with(workload_id=self.plugin.docker_id)
-            m_generate_cali_interface_name.assert_called_once_with(IF_PREFIX, 'ep_id')
+            m_container_add.assert_called_once_with(
+                'container_pid', IPAddress('1.1.1.1'),
+                'eth0', TEST_HOST, TEST_ORCH_ID
+            )
+            m_generate_cali_interface_name.assert_called_once_with(
+                IF_PREFIX, endpoint.endpoint_id)
             m_get_node_ip.assert_called_once_with()
             m_check_call.assert_called_once_with(
                 ['ip', 'addr', 'add', '1.2.3.4' + '/32',
                 'dev', 'interface_name'])
-            self.assertEqual(return_val.endpoint_id, 'ep_id')
+            self.assertEqual(return_val, endpoint)
 
-    def test_get_node_ip(self):
+
+    def test_container_add(self):
+        with patch.object(self.plugin, '_datastore_client',
+                autospec=True) as m_datastore_client,\
+            patch.object(self.plugin, '_validate_container_state',
+                autospec=True) as m_validate_container_state:
+            # Set up mock objs
+            m_datastore_client.get_endpoint.side_effect = KeyError
+            endpoint = Endpoint(TEST_HOST, TEST_ORCH_ID, '1234', '5678',
+                                'active', 'mac')
+            endpoint.provision_veth = Mock()
+            endpoint.provision_veth.return_value = 'new_mac'
+            m_datastore_client.create_endpoint.return_value = endpoint
+
+            # Set up arguments
+            container_name = 'container_name'
+            self.plugin.docker_id = container_name
+            pid = 'pid'
+            ip = IPAddress('1.1.1.1')
+            interface = 'eth0'
+            hostname = TEST_HOST
+            orchestrator_id = TEST_ORCH_ID
+
+            # Call method under test
+            test_return = self.plugin._container_add(
+                pid, ip, interface, hostname, orchestrator_id
+            )
+
+            # Assert
+            m_datastore_client.get_endpoint.assert_called_once_with(
+                hostname=hostname,
+                orchestrator_id=orchestrator_id,
+                workload_id=self.plugin.docker_id
+            )
+            m_validate_container_state.assert_called_once_with(container_name)
+            m_datastore_client.assign_address.assert_called_once_with(None, ip)
+            m_datastore_client.create_endpoint.assert_called_once_with(
+                hostname, orchestrator_id, self.plugin.docker_id, [ip]
+            )
+            m_datastore_client.set_endpoint.assert_called_once_with(endpoint)
+            endpoint.provision_veth.assert_called_once_with(pid, interface)
+            self.assertEqual(endpoint.mac, 'new_mac')
+            self.assertEqual(test_return, endpoint)
+
+    def test_container_add_container_exists(self):
+        """
+        Test _container_add method when container already exists.
+
+        Expect system exit.
+        """
+        with patch.object(self.plugin, '_datastore_client',
+                autospec=True) as m_datastore_client:
+            # Set up arguments
+            container_name = 'container_name'
+            workload_id = 'workload_id'
+            pid = 'pid'
+            ip = '1.1.1.1'
+            interface = 'eth0'
+            hostname = TEST_HOST
+            orchestrator_id = TEST_ORCH_ID
+
+            # Call method under test
+            self.assertRaises(SystemExit, self.plugin._container_add,
+                pid, ip, interface, hostname, orchestrator_id
+            )
+
+    def test_container_remove(self):
+        with patch.object(self.plugin, '_datastore_client', autospec=True) as m_datastore_client,\
+            patch('calico_kubernetes.calico_kubernetes.netns.remove_veth', autospec=True) as m_remove_veth:
+            #Set up mock objs
+            endpoint = Endpoint(TEST_HOST, TEST_ORCH_ID, '1234', '5678',
+                                'active', 'mac')
+            ipv4 = IPAddress('1.1.1.1')
+            ipv6 = IPAddress('201:db8::')
+            endpoint.ipv4_nets.add(IPNetwork(ipv4))
+            endpoint.ipv6_nets.add(IPNetwork(ipv6))
+            m_datastore_client.get_endpoint.return_value = endpoint
+
+            # Set up arguments
+            self.plugin.docker_id = "abcd"
+            hostname = TEST_HOST
+            orchestrator_id = TEST_ORCH_ID
+
+            # Call method under test
+            test_return = self.plugin._container_remove(
+                hostname, orchestrator_id
+            )
+
+            # Assert
+            m_datastore_client.get_endpoint.assert_called_once_with(
+                hostname=hostname,
+                orchestrator_id=orchestrator_id,
+                workload_id='abcd'
+            )
+            m_datastore_client.unassign_address.assert_has_calls([
+                call(None, ipv6),
+                call(None, ipv4)
+            ])
+            m_remove_veth.assert_called_once_with(endpoint.name)
+
+    def test_container_remove_no_endpoints(self):
+        """
+        Test _container_remove when the container does not container any endpoints
+
+        Expect a system exit
+        """
+        with patch.object(self.plugin, '_datastore_client', autospec=True) as m_datastore_client:
+            m_datastore_client.get_endpoint.side_effect = KeyError
+
+            # Set up arguments
+            hostname = TEST_HOST
+            orchestrator_id = TEST_ORCH_ID
+
+            # Call method under test
+            self.assertRaises(SystemExit, self.plugin._container_remove,
+                hostname, orchestrator_id
+            )
+
+    def test_validate_container_state(self):
+        with patch.object(self.plugin, '_get_container_info', autospec=True) as m_get_container_info:
+            # Set up mock objs
+            info_dict = {'State': {'Running': 1}, 'HostConfig': {'NetworkMode': ''}}
+            m_get_container_info.return_value = info_dict
+
+            # Call method under test
+            self.plugin._validate_container_state('container_name')
+
+            # Assert
+            m_get_container_info.assert_called_once_with('container_name')
+            self.assertTrue(info_dict['State']['Running'])
+            self.assertNotEqual(info_dict['HostConfig']['NetworkMode'], 'host')
+
+    def test_validate_container_state_not_running(self):
+        """
+        Test _validate_container_state when the container is not running
+
+        Expect system exit
+        """
+        with patch.object(self.plugin, '_get_container_info', autospec=True) as m_get_container_info:
+            # Set up mock objs
+            info_dict = {'State': {'Running': 0}, 'HostConfig': {'NetworkMode': ''}}
+            m_get_container_info.return_value = info_dict
+
+            # Call method under test
+            self.assertRaises(SystemExit, self.plugin._validate_container_state,
+                              'container_name')
+
+    def test_valdiate_container_state_network_mode_host(self):
+        """
+        Test _validate_container_state when the network mode is host
+
+        Expect system exit
+        """
+        with patch.object(self.plugin, '_get_container_info', autospec=True) as m_get_container_info:
+            # Set up mock objs
+            info_dict = {'State': {'Running': 1}, 'HostConfig': {'NetworkMode': 'host'}}
+            m_get_container_info.return_value = info_dict
+
+            # Call method under test
+            self.assertRaises(SystemExit, self.plugin._validate_container_state,
+                              'container_name')
+
+    def test_get_container_info(self):
+        with patch.object(self.plugin, '_docker_client', autospec=True) as m_docker_client:
+            # Set up args
+            container_name = 'container_name'
+
+            # Call method under test
+            self.plugin._get_container_info(container_name)
+
+            # Assert
+            m_docker_client.inspect_container.assert_called_once_with(container_name)
+
+    def test_get_container_info_docker_api_error(self):
+        with patch.object(self.plugin, '_docker_client', autospec=True) as m_docker_client:
+            # Create mock side effect APIError
+            m_docker_client.inspect_container.side_effect = APIError('Error', Mock())
+
+            # Set up args
+            container_name = 'container_name'
+
+            # Call method under test
+            self.assertRaises(SystemExit, self.plugin._get_container_info, container_name)
+
+    def test_get_container_pid(self):
+        with patch.object(self.plugin, '_get_container_info', autospec=True) as m_get_container_info:
+            # Set up args
+            container_name = 'container_name'
+
+            # Call method under test
+            self.plugin._get_container_pid(container_name)
+
+            # Assert
+            m_get_container_info.assert_called_once_with(container_name)
+
+    def test_get_node_ip_no_host_ips(self):
+        """
+        Test _get_nope_ip when get_host_ip does not return any ips
+
+        Expect system exit
+        """
         with patch('calico_kubernetes.calico_kubernetes.get_host_ips',
                    autospec=True) as m_get_host_ips:
             # Set up mock objects
@@ -136,46 +364,52 @@ class NetworkPluginTest(unittest.TestCase):
             m_get_host_ips.assert_called_once_with(version=4)
             self.assertEqual(return_val, '1.2.3.4')
 
-    def test_read_docker_ip(self):
-        with patch.object(calico_kubernetes, 'check_output',
-                          autospec=True) as m_check_output:
+    def test_get_node_ip(self):
+        with patch('calico_kubernetes.calico_kubernetes.get_host_ips',
+                   autospec=True) as m_get_host_ips:
             # Set up mock objects
-            m_check_output.return_value = '1.2.3.4'
+            m_get_host_ips.return_value = []
+
+            # Call method under test
+            self.assertRaises(SystemExit, self.plugin._get_node_ip)
+
+    def test_read_docker_ip(self):
+        with patch.object(self.plugin, '_get_container_info',
+                          autospec=True) as m_get_container_info:
+            # Set up mock objects
+            m_get_container_info.return_value = {'NetworkSettings': {'IPAddress': '1.2.3.4'}}
 
             # Call method under test
             return_val = self.plugin._read_docker_ip()
 
             # Assert
-            m_check_output.assert_called_once_with([
-                'docker', 'inspect', '-format', '{{ .NetworkSettings.IPAddress }}',
-                self.plugin.docker_id])
-            self.assertEqual(return_val, '1.2.3.4')
+            m_get_container_info.assert_called_once_with(self.plugin.docker_id)
+            self.assertEqual(return_val, IPAddress('1.2.3.4'))
 
     def test_delete_docker_interface(self):
         with patch.object(calico_kubernetes, 'check_output',
-                          autospec=True) as m_check_output:
+                          autospec=True) as m_check_output,\
+                patch.object(self.plugin, '_get_container_pid', autospec=True) as m_get_container_pid:
             # Set up mock objects
-            m_check_output.return_value = 'pid'
+            m_get_container_pid.return_value = 'pid'
 
             # Call method under test
             self.plugin._delete_docker_interface()
 
             # Assert call list
-            call_1 = call([
-                'docker', 'inspect', '-format', '{{ .State.Pid }}',
-                self.plugin.docker_id])
-            call_2 = call(['mkdir', '-p', '/var/run/netns'])
-            call_3 = call(['ln', '-s', '/proc/' + 'pid' + '/ns/net',
-                            '/var/run/netns/pid'])
-            call_4 = call(['ip', 'netns', 'exec', 'pid', 'ip', 'link', 'del', 'eth0'])
-            call_5 = call(['rm', '/var/run/netns/pid'])
-            calls = [call_1,call_2,call_3,call_4,call_5]
 
-            m_check_output.assert_has_calls(calls)
+            m_check_output.assert_has_calls([
+                call(['mkdir', '-p', '/var/run/netns']),
+                call(['ln', '-s', '/proc/' + 'pid' + '/ns/net', '/var/run/netns/pid']),
+                call(['ip', 'netns', 'exec', 'pid', 'ip', 'link', 'del', 'eth0']),
+                call(['rm', '/var/run/netns/pid'])
+            ], any_order=True)
 
     def test_configure_profile(self):
-        with patch.object(self.plugin, 'calicoctl',
-                    autospec=True) as m_calicoctl, \
+        with patch.object(self.plugin, '_datastore_client',
+                    autospec=True) as m_datastore_client, \
+                patch.object(self.plugin, '_get_namespace_tag',
+                    autospec=True) as m_get_namespace_tag, \
                 patch.object(self.plugin, '_get_pod_config',
                     autospec=True) as m_get_pod_config, \
                 patch.object(self.plugin, '_apply_rules',
@@ -183,25 +417,61 @@ class NetworkPluginTest(unittest.TestCase):
                 patch.object(self.plugin, '_apply_tags',
                     autospec=True) as m_apply_tags:
             # Set up mock objects
-            m_endpoint = Mock()
-            m_endpoint.endpoint_id = 'ep_id'
+            m_datastore_client.profile_exists.return_value = False
+            m_get_pod_config.return_value = 'pod'
+            m_get_namespace_tag.return_value = 'tag'
+
+            # Set up class members
+            pod_name = 'pod_name'
+            profile_name = 'profile_name'
+            self.plugin.pod_name = pod_name
+            self.plugin.profile_name = profile_name
+
+            # Set up args
+            endpoint = Endpoint(TEST_HOST, TEST_ORCH_ID, '1234', '5678',
+                                'active', 'mac')
+
+            # Call method under test
+            self.plugin._configure_profile(endpoint)
+
+            # Assert
+            m_datastore_client.profile_exists.assert_called_once_with(self.plugin.profile_name)
+            m_datastore_client.create_profile.assert_called_once_with(self.plugin.profile_name)
+            m_get_pod_config.assert_called_once_with()
+            m_apply_rules.assert_called_once_with('pod')
+            m_apply_tags.assert_called_once_with('pod')
+            m_datastore_client.set_profiles_on_endpoint.assert_called_once_with(
+                [profile_name], endpoint_id=endpoint.endpoint_id)
+
+    def test_configure_profile_profile_exists(self):
+        """
+        Test _configure_profile when profile already exists.
+
+        Expect system exit.
+        """
+        with patch.object(self.plugin, '_datastore_client',
+                    autospec=True) as m_datastore_client, \
+                patch.object(self.plugin, '_get_pod_config',
+                    autospec=True) as m_get_pod_config:
+            # Set up mock objects
+            m_datastore_client.profile_exists.return_value = True
             m_get_pod_config.return_value = 'pod'
 
             # Set up class members
-            self.plugin.pod_name = 'podname'
+            profile_name = 'profile_name'
+            self.plugin.profile_name = profile_name
+
+            # Set up args
+            endpoint = Endpoint(TEST_HOST, TEST_ORCH_ID, '1234', '5678',
+                                'active', 'mac')
 
             # Call method under test
-            self.plugin._configure_profile(m_endpoint)
+            self.assertRaises(SystemExit, self.plugin._configure_profile, endpoint)
 
             # Assert
-            m_calicoctl_call_1 = call('profile', 'add', 'podname')
-            m_calicoctl_call_2 = call('endpoint', 'ep_id', 'profile',
-                                        'set', self.plugin.pod_name)
-            m_calicoctl_calls = [m_calicoctl_call_1,m_calicoctl_call_2]
-            m_calicoctl.assert_has_calls(m_calicoctl_calls)
             m_get_pod_config.assert_called_once_with()
-            m_apply_rules.assert_called_once_with('podname')
-            m_apply_tags.assert_called_once_with('podname', 'pod')
+            m_datastore_client.profile_exists.assert_called_once_with(profile_name)
+            self.assertFalse(m_datastore_client.create_profile.called)
 
     def test_get_pod_ports(self):
         # Initialize pod dictionary and expected outcome
@@ -235,14 +505,15 @@ class NetworkPluginTest(unittest.TestCase):
         with patch.object(self.plugin, '_get_api_path',
                     autospec=True) as m_get_api_path:
             # Set up mock object
-            pod1 = {'metadata': {'name': 'pod-1'}}
-            pod2 = {'metadata': {'name': 'pod-2'}}
-            pod3 = {'metadata': {'name': 'pod-3'}}
+            pod1 = {'metadata': {'namespace': 'a', 'name': 'pod-1'}}
+            pod2 = {'metadata': {'namespace': 'a', 'name': 'pod-2'}}
+            pod3 = {'metadata': {'namespace': 'a', 'name': 'pod-3'}}
             pods = [pod1, pod2, pod3]
             m_get_api_path.return_value = pods
 
             # Set up class member
             self.plugin.pod_name = 'pod-2'
+            self.plugin.namespace = 'a'
 
             # Call method under test
             return_val = self.plugin._get_pod_config()
@@ -314,79 +585,116 @@ class NetworkPluginTest(unittest.TestCase):
             m_json.assert_called_once_with('json_string')
             self.assertEqual(return_val, 'correct_return')
 
-    def test_generate_rules(self):
-        # Call method under test
-        return_val = self.plugin._generate_rules()
+    def test_get_api_token_no_auth_file(self):
+        """
+        Test _get_api_token when no autho token is found
 
-        # Assert
-        self.assertEqual(return_val, ([{'action': 'allow'}], [{'action': 'allow'}]))
-
-    def test_generate_profile_json(self):
-        with patch('calico_kubernetes.calico_kubernetes.json.dumps',
-                   autospec=True) as m_json:
+        Assert that the method returns an empty string
+        """
+        with patch('__builtin__.open', autospec=True) as m_open, \
+                patch.object(json, 'loads', autospec=True) as m_json:
             # Set up mock objects
-            m_json.return_value = 'correct_return'
-
-            # Initialize args
-            rules = ('inbound', 'outbound')
-            profile_name = 'profile_name'
+            m_open.side_effect = IOError
+            m_json.return_value = {'BearerToken' : 'correct_return'}
 
             # Call method under test
-            return_val = self.plugin._generate_profile_json(
-                profile_name, rules)
+            return_val = self.plugin._get_api_token()
 
-            # Assert
-            m_json.assert_called_once_with(
-                {'id': 'profile_name',
-                'inbound_rules': 'inbound',
-                'outbound_rules': 'outbound'},
-                 indent=2)
-            self.assertEqual(return_val, 'correct_return')
+            m_open.assert_called_once_with('/var/lib/kubelet/kubernetes_auth')
+            self.assertFalse(m_json.called)
+            self.assertEqual(return_val, "")
+
+    def test_generate_rules(self):
+        pod = {'metadata': {'profile': 'name'}}
+
+
+        # Call method under test empty annotations/namespace
+        return_val = self.plugin._generate_rules(pod)
+        # Assert
+        self.assertEqual(return_val, ([["allow"]], [["allow"]]))
 
     def test_apply_rules(self):
         with patch.object(self.plugin, '_generate_rules',
                     autospec=True) as m_generate_rules, \
-                patch.object(self.plugin, '_generate_profile_json',
-                    autospec=True) as m_generate_profile_json, \
+                patch.object(self.plugin, '_datastore_client',
+                    autospec=True) as m_datastore_client, \
                 patch.object(self.plugin, 'calicoctl',
                     autospec=True) as m_calicoctl:
+
             # Set up mock objects
-            m_generate_rules.return_value = 'rules'
-            m_generate_profile_json.return_value = 'json_profile'
-            profile = Mock()
+            m_profile = Mock()
+            m_datastore_client.get_profile.return_value = m_profile
+            m_generate_rules.return_value = ([["allow"]], [["allow"]])
+            m_calicoctl.return_value = None
+            profile_name = 'a_b_c'
+            self.plugin.profile_name = profile_name
+            pod = {'metadata': {'namespace': 'a', 'profile': 'name'}}
+            self.plugin.namespace = pod['metadata']['namespace']
 
             # Call method under test
-            self.plugin._apply_rules(profile)
+            self.plugin._apply_rules(pod)
 
             # Assert
-            m_generate_rules.assert_called_once_with()
-            m_generate_profile_json.assert_called_once_with(profile, 'rules')
-            m_calicoctl.assert_called_once_with('profile', profile, 'rule',
-                                                'update', _in='json_profile')
+            m_datastore_client.get_profile.assert_called_once_with(profile_name)
+            m_calicoctl.assert_has_calls([
+                call('profile', profile_name, 'rule', 'remove', 'inbound', '--at=2'),
+                call('profile', profile_name, 'rule', 'remove', 'inbound', '--at=1'),
+                call('profile', profile_name, 'rule', 'remove', 'outbound', '--at=1')
+                ])
+            m_generate_rules.assert_called_once_with(pod)
+            m_datastore_client.profile_update_rules(m_profile)
+
+    def test_apply_rules_profile_not_found(self):
+        with patch.object(self.plugin, '_datastore_client', autospec=True) as m_datastore_client:
+            m_datastore_client.get_profile.side_effect = KeyError
+            self.assertRaises(SystemExit, self.plugin._apply_rules, 'profile')
 
     def test_apply_tags(self):
-        with patch.object(self.plugin, 'calicoctl', autospec=True) as m_calicoctl:
+        with patch.object(self.plugin, '_datastore_client', autospec=True) as m_datastore_client:
+            # Intialize args
+            pod = {'metadata': {'namespace': 'a', 'labels': {1: 2, "2/3": "4_5"}}}
+            self.plugin.namespace = pod['metadata']['namespace']
+            self.plugin.profile_name = 'profile_name'
+
+            # Set up mock objs
+            m_profile = Mock(spec=Profile, name = self.plugin.profile_name)
+            m_profile.tags = set()
+            m_datastore_client.get_profile.return_value = m_profile
+
+            check_tags = set()
+            check_tags.add('namespace_a')
+            check_tags.add('a_1_2')
+            check_tags.add('a_2_3_4__5')
+
+            # Call method under test
+            self.plugin._apply_tags(pod)
+
+            # Assert
+            m_datastore_client.get_profile.assert_called_once_with(self.plugin.profile_name)
+            m_datastore_client.profile_update_tags.assert_called_once_with(m_profile)
+            self.assertEqual(m_profile.tags, check_tags)
+
+    def test_apply_tags_no_labels(self):
+        with patch.object(self.plugin, '_datastore_client', autospec=True) as m_datastore_client:
+            # Intialize args
+            pod = {}
+            self.plugin.profile_name = 'profile_name'
+            m_datastore_client.get_profile.return_value = Mock()
+
+            # Call method under test
+            self.plugin._apply_tags(pod)
+
+            # Assert
+            self.assertFalse(m_datastore_client.called)
+
+    def test_apply_tags_profile_not_found(self):
+        with patch.object(self.plugin, '_datastore_client', autospec=True) as m_datastore_client:
             # Intialize args
             pod = {'metadata': {'labels': {1: 1, 2: 2}}}
             profile_name = 'profile_name'
 
-            # Call method under test
-            self.plugin._apply_tags(profile_name,pod)
+            # Set up mock objs
+            m_datastore_client.get_profile.side_effect = KeyError
 
-            # Assert
-            call_1 = call('profile', 'profile_name', 'tag', 'add', '1_1')
-            call_2 = call('profile', 'profile_name', 'tag', 'add', '2_2')
-            calls = [call_1, call_2]
-            m_calicoctl.assert_has_calls(calls)
-
-    def test_apply_tags_error(self):
-        with patch.object(self.plugin, 'calicoctl',autospec=True) as m_calicoctl:
-            # Intialize args
-            pod = {}
-            profile_name = 'profile_name'
-
-            # Call method under test
-            self.plugin._apply_tags(profile_name, pod)
-
-            # Assert
-            self.assertFalse(m_calicoctl.called)
+            # Call method under test expecting sys exit
+            self.assertRaises(SystemExit, self.plugin._apply_tags, pod)
