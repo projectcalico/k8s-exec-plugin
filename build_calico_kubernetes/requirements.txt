@@ -7,3 +7,4 @@ nose-timer
 nose-parameterized
 mock==1.0.1
 docker-py==1.2.1
+requests==2.7.0
