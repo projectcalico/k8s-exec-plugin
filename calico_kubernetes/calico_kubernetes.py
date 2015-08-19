@@ -205,7 +205,8 @@ class NetworkPlugin(object):
 
         # Create the veth, move into the container namespace, add the IP and
         # set up the default routes.
-        ep.mac = ep.provision_veth(pid, interface)
+        ns = netns.PidNamespace(pid)
+        ep.mac = ep.provision_veth(ns, interface)
         self._datastore_client.set_endpoint(ep)
 
         # Let the caller know what endpoint was created.
