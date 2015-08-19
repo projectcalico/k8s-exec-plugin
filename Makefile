@@ -51,7 +51,6 @@ clean:
 	-rm -f *.created
 	find . -name '*.pyc' -exec rm -f {} +
 	-rm -rf dist
-	-docker rm -f calico-build
-	-docker rmi calico/kubernetes-build
+	-docker rmi -f calico/kubernetes-build
 	-docker run -v /var/run/docker.sock:/var/run/docker.sock -v /var/lib/docker:/var/lib/docker --rm martin/docker-cleanup-volumes
 

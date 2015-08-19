@@ -156,7 +156,8 @@ class NetworkPluginTest(unittest.TestCase):
         with patch.object(self.plugin, '_datastore_client',
                 autospec=True) as m_datastore_client,\
             patch.object(self.plugin, '_validate_container_state',
-                autospec=True) as m_validate_container_state:
+                autospec=True) as m_validate_container_state, \
+            patch('calico_kubernetes.calico_kubernetes.netns.PidNamespace', autospec=True) as m_pid_ns:
             # Set up mock objs
             m_datastore_client.get_endpoint.side_effect = KeyError
             endpoint = Endpoint(TEST_HOST, TEST_ORCH_ID, '1234', '5678',
@@ -191,7 +192,7 @@ class NetworkPluginTest(unittest.TestCase):
                 hostname, orchestrator_id, self.plugin.docker_id, [ip]
             )
             m_datastore_client.set_endpoint.assert_called_once_with(endpoint)
-            endpoint.provision_veth.assert_called_once_with(pid, interface)
+            endpoint.provision_veth.assert_called_once_with(m_pid_ns(pid), interface)
             self.assertEqual(endpoint.mac, 'new_mac')
             self.assertEqual(test_return, endpoint)
 
