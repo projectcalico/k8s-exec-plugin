@@ -97,7 +97,7 @@ class NetworkPluginTest(unittest.TestCase):
             self.plugin.delete(namespace, pod_name, docker_id)
 
             # Assert
-            m_container_remove.assert_called_once_with(TEST_HOST, TEST_ORCH_ID)
+            m_container_remove.assert_called_once_with()
             self.assertEqual(namespace, self.plugin.namespace)
             self.assertEqual(pod_name, self.plugin.pod_name)
             self.assertEqual(docker_id, self.plugin.docker_id)
@@ -137,12 +137,8 @@ class NetworkPluginTest(unittest.TestCase):
 
             # Assert
             m_get_container_pid.assert_called_once_with(container_name)
-            m_read_docker_ip.assert_called_once_with()
             m_delete_docker_interface.assert_called_once_with()
-            m_container_add.assert_called_once_with(
-                'container_pid', IPAddress('1.1.1.1'),
-                'eth0', TEST_HOST, TEST_ORCH_ID
-            )
+            m_container_add.assert_called_once_with('container_pid', 'eth0')
             m_generate_cali_interface_name.assert_called_once_with(
                 IF_PREFIX, endpoint.endpoint_id)
             m_get_node_ip.assert_called_once_with()
@@ -157,7 +153,8 @@ class NetworkPluginTest(unittest.TestCase):
                 autospec=True) as m_datastore_client,\
             patch.object(self.plugin, '_validate_container_state',
                 autospec=True) as m_validate_container_state, \
-            patch('calico_kubernetes.calico_kubernetes.netns.PidNamespace', autospec=True) as m_pid_ns:
+            patch('calico_kubernetes.calico_kubernetes.netns.PidNamespace', autospec=True) as m_pid_ns,\
+            patch.object(self.plugin, '_read_docker_ip', autospec=True) as m_read_docker_ip:
             # Set up mock objs
             m_datastore_client.get_endpoint.side_effect = KeyError
             endpoint = Endpoint(TEST_HOST, TEST_ORCH_ID, '1234', '5678',
@@ -176,9 +173,7 @@ class NetworkPluginTest(unittest.TestCase):
             orchestrator_id = TEST_ORCH_ID
 
             # Call method under test
-            test_return = self.plugin._container_add(
-                pid, ip, interface, hostname, orchestrator_id
-            )
+            test_return = self.plugin._container_add(pid, interface)
 
             # Assert
             m_datastore_client.get_endpoint.assert_called_once_with(
@@ -187,10 +182,6 @@ class NetworkPluginTest(unittest.TestCase):
                 workload_id=self.plugin.docker_id
             )
             m_validate_container_state.assert_called_once_with(container_name)
-            m_datastore_client.assign_address.assert_called_once_with(None, ip)
-            m_datastore_client.create_endpoint.assert_called_once_with(
-                hostname, orchestrator_id, self.plugin.docker_id, [ip]
-            )
             m_datastore_client.set_endpoint.assert_called_once_with(endpoint)
             endpoint.provision_veth.assert_called_once_with(m_pid_ns(pid), interface)
             self.assertEqual(endpoint.mac, 'new_mac')
@@ -208,15 +199,12 @@ class NetworkPluginTest(unittest.TestCase):
             container_name = 'container_name'
             workload_id = 'workload_id'
             pid = 'pid'
-            ip = '1.1.1.1'
             interface = 'eth0'
             hostname = TEST_HOST
             orchestrator_id = TEST_ORCH_ID
 
             # Call method under test
-            self.assertRaises(SystemExit, self.plugin._container_add,
-                pid, ip, interface, hostname, orchestrator_id
-            )
+            self.assertRaises(SystemExit, self.plugin._container_add, pid, interface)
 
     def test_container_remove(self):
         with patch.object(self.plugin, '_datastore_client', autospec=True) as m_datastore_client,\
@@ -236,9 +224,7 @@ class NetworkPluginTest(unittest.TestCase):
             orchestrator_id = TEST_ORCH_ID
 
             # Call method under test
-            test_return = self.plugin._container_remove(
-                hostname, orchestrator_id
-            )
+            test_return = self.plugin._container_remove()
 
             # Assert
             m_datastore_client.get_endpoint.assert_called_once_with(
@@ -246,10 +232,7 @@ class NetworkPluginTest(unittest.TestCase):
                 orchestrator_id=orchestrator_id,
                 workload_id='abcd'
             )
-            m_datastore_client.unassign_address.assert_has_calls([
-                call(None, ipv6),
-                call(None, ipv4)
-            ])
+
             m_remove_veth.assert_called_once_with(endpoint.name)
 
     def test_container_remove_no_endpoints(self):
@@ -266,9 +249,7 @@ class NetworkPluginTest(unittest.TestCase):
             orchestrator_id = TEST_ORCH_ID
 
             # Call method under test
-            self.assertRaises(SystemExit, self.plugin._container_remove,
-                hostname, orchestrator_id
-            )
+            self.assertRaises(SystemExit, self.plugin._container_remove)
 
     def test_validate_container_state(self):
         with patch.object(self.plugin, '_get_container_info', autospec=True) as m_get_container_info:

@@ -3,15 +3,33 @@ import logging
 import os
 
 LOG_DIR = '/var/log/calico/kubernetes'
+ROOT_LOG_FORMAT = '%(asctime)s %(process)d %(levelname)s %(message)s'
+LOG_FORMAT = '%(asctime)s %(process)d %(levelname)s %(filename)s: %(message)s'
 
-def configure_logger(logger, log_dir=None):
-    if log_dir is None:
-        log_dir = LOG_DIR
 
+def configure_logger(logger, root_logger=False, log_dir=LOG_DIR):
+    """
+    Configures logging to the file 'calico.log' in the specified log directory
+
+    If the logs are not coming from calico_kubernetes.py, format the log to
+     include the filename of origin
+
+    :param logger: logger object to configure
+    :param root_logger: True indicated logger is calico_kubernetes. False indicates otherwise
+    :param log_dir: Directory where calico.log lives. If None set to default
+    :return:
+    """
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
+
     hdlr = logging.FileHandler(filename=log_dir+'/calico.log')
-    formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
-    hdlr.setFormatter(formatter)
+
+    if root_logger:
+        formatter = logging.Formatter(ROOT_LOG_FORMAT)
+        hdlr.setFormatter(formatter)
+    else:
+        formatter = logging.Formatter(LOG_FORMAT)
+        hdlr.setFormatter(formatter)
+
     logger.addHandler(hdlr)
     logger.setLevel(logging.INFO)
