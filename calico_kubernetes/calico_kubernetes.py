@@ -35,6 +35,9 @@ CALICOCTL_PATH = os.environ.get('CALICOCTL_PATH', '/usr/bin/calicoctl')
 KUBE_API_ROOT = os.environ.get('KUBE_API_ROOT',
                                'http://kubernetes-master:8080/api/v1/')
 
+# Allow the user to enable/disable namespace isolation policy
+NAMESPACE_ISOLATION = os.environ.get('NAMESPACE_ISOLATION', 'true')
+
 
 class NetworkPlugin(object):
 
@@ -402,7 +405,7 @@ class NetworkPlugin(object):
                         "allow all inbound and outbound traffic", pod)
             return [["allow"]], [["allow"]]
 
-        if self.namespace:
+        if self.namespace and NAMESPACE_ISOLATION == 'true':
             inbound_rules = [["allow", "from", "tag", ns_tag]]
             outbound_rules = [["allow"]]
         else:
@@ -604,6 +607,7 @@ if __name__ == '__main__':
     logger.info("Using ETCD_AUTHORITY=%s", os.environ[ETCD_AUTHORITY_ENV])
     logger.info("Using CALICOCTL_PATH=%s", CALICOCTL_PATH)
     logger.info("Using KUBE_API_ROOT=%s", KUBE_API_ROOT)
+    logger.info("Using NAMESPACE_ISOLATION=%s", NAMESPACE_ISOLATION)
     mode = sys.argv[1]
 
     if mode == 'init':
