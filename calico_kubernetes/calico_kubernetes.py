@@ -36,7 +36,7 @@ KUBE_API_ROOT = os.environ.get('KUBE_API_ROOT',
                                'http://kubernetes-master:8080/api/v1/')
 
 # Allow the user to enable/disable namespace isolation policy
-DEFAULT_POLICY = os.environ.get('DEFAULT_POLICY', 'ns_isolation')
+DEFAULT_POLICY = os.environ.get('DEFAULT_POLICY', 'allow')
 
 
 class NetworkPlugin(object):
