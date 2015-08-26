@@ -24,6 +24,8 @@ DOCKER_VERSION = "1.16"
 ORCHESTRATOR_ID = "docker"
 HOSTNAME = socket.gethostname()
 
+POLICY_ANNOTATION_KEY = "projectcalico.org/policy"
+
 ETCD_AUTHORITY_ENV = "ETCD_AUTHORITY"
 if ETCD_AUTHORITY_ENV not in os.environ:
     os.environ[ETCD_AUTHORITY_ENV] = 'kubernetes-master:6666'
@@ -417,10 +419,10 @@ class NetworkPlugin(object):
         annotations = self._get_metadata(pod, "annotations")
 
         # Find policy block of annotations
-        if annotations and "policy" in annotations.keys():
+        if annotations and POLICY_ANNOTATION_KEY in annotations:
             # Remove Default Rule (Allow Namespace)
             inbound_rules = []
-            rules = annotations["policy"]
+            rules = annotations[POLICY_ANNOTATION_KEY]
 
             # Rules separated by semicolons
             for rule in rules.split(";"):
