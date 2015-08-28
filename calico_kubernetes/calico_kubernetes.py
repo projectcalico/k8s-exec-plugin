@@ -379,16 +379,39 @@ class NetworkPlugin(object):
         :rtype: str
         """
         logger.info('Getting Kubernetes Authorization')
+
         try:
             with open('/var/lib/kubelet/kubernetes_auth') as f:
                 json_string = f.read()
         except IOError as e:
-            logger.info("Failed to open auth_file (%s), assuming insecure mode" % e)
-            return ""
+            if self._api_root_secure():
+                logger.exception("Failed to open auth_file when API root is "
+                                 "set to secure (%s). Exiting", KUBE_API_ROOT)
+                sys.exit(1)
+            else:
+                logger.warning("No bearer token found")
+                logger.warning("Using insecure mode")
+                return ""
 
         logger.info('Got kubernetes_auth: ' + json_string)
         auth_data = json.loads(json_string)
         return auth_data['BearerToken']
+
+    def _api_root_secure(self):
+        """
+        Checks whether the KUBE_API_ROOT is secure or insecure
+        If not an http or https address, log and exit
+
+        :return: Boolean: True if secure. False if insecure
+        """
+        if (KUBE_API_ROOT[:5] == 'https'):
+            return True
+        elif (KUBE_API_ROOT[:5] == 'http:'):
+            return False
+        else:
+            logger.error('KUBE_API_ROOT is not set correctly (%s). Please specify '
+                         'a http or https address. Exiting', KUBE_API_ROOT)
+            sys.exit(1)
 
     def _generate_rules(self, pod):
         """
