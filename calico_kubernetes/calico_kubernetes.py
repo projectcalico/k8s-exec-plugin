@@ -384,13 +384,12 @@ class NetworkPlugin(object):
             with open('/var/lib/kubelet/kubernetes_auth') as f:
                 json_string = f.read()
         except IOError as e:
+            logger.warning("Failed to open auth_file (%s). Assuming insecure mode", e)
             if self._api_root_secure():
-                logger.exception("Failed to open auth_file when API root is "
-                                 "set to secure (%s). Exiting", KUBE_API_ROOT)
+                logger.error("Cannot use insecure mode. API root is set to"
+                             "secure (%s). Exiting", KUBE_API_ROOT)
                 sys.exit(1)
             else:
-                logger.warning("No bearer token found")
-                logger.warning("Using insecure mode")
                 return ""
 
         logger.info('Got kubernetes_auth: ' + json_string)
@@ -399,8 +398,8 @@ class NetworkPlugin(object):
 
     def _api_root_secure(self):
         """
-        Checks whether the KUBE_API_ROOT is secure or insecure
-        If not an http or https address, log and exit
+        Checks whether the KUBE_API_ROOT is secure or insecure.
+        If not an http or https address, exit.
 
         :return: Boolean: True if secure. False if insecure
         """
