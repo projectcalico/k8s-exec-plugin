@@ -21,6 +21,7 @@ from pycalico.block import AlreadyAssignedError
 
 logger = logging.getLogger(__name__)
 pycalico_logger = logging.getLogger(pycalico.__name__)
+LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO').upper()
 
 DOCKER_VERSION = "1.16"
 ORCHESTRATOR_ID = "docker"
@@ -688,8 +689,8 @@ class NetworkPlugin(object):
 
 
 if __name__ == '__main__':
-    configure_logger(logger, True)
-    configure_logger(pycalico_logger, False)
+    configure_logger(logger, LOG_LEVEL, True)
+    configure_logger(pycalico_logger, LOG_LEVEL, False)
 
     mode = sys.argv[1]
 
@@ -702,10 +703,12 @@ if __name__ == '__main__':
         docker_id = sys.argv[4]
 
         logger.info('Args: %s' % sys.argv)
+        logger.info("Using LOG_LEVEL=%s", LOG_LEVEL)
         logger.info("Using ETCD_AUTHORITY=%s", os.environ[ETCD_AUTHORITY_ENV])
         logger.info("Using CALICOCTL_PATH=%s", CALICOCTL_PATH)
         logger.info("Using KUBE_API_ROOT=%s", KUBE_API_ROOT)
         logger.info("Using CALICO_IPAM=%s", CALICO_IPAM)
+        logger.info("Using DEFAULT_POLICY=%s", DEFAULT_POLICY)
 
         if mode == 'setup':
             logger.info('Executing Calico pod-creation hook')

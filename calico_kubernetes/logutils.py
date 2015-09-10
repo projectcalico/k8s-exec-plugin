@@ -7,7 +7,7 @@ ROOT_LOG_FORMAT = '%(asctime)s %(process)d %(levelname)s %(message)s'
 LOG_FORMAT = '%(asctime)s %(process)d %(levelname)s %(filename)s: %(message)s'
 
 
-def configure_logger(logger, root_logger=False, log_dir=LOG_DIR):
+def configure_logger(logger, logging_level, root_logger=False, log_dir=LOG_DIR):
     """
     Configures logging to the file 'calico.log' in the specified log directory
 
@@ -15,6 +15,7 @@ def configure_logger(logger, root_logger=False, log_dir=LOG_DIR):
      include the filename of origin
 
     :param logger: logger object to configure
+    :param logging_level: level at which logger starts logging. Input type is lowercase string
     :param root_logger: True indicated logger is calico_kubernetes. False indicates otherwise
     :param log_dir: Directory where calico.log lives. If None set to default
     :return:
@@ -32,4 +33,4 @@ def configure_logger(logger, root_logger=False, log_dir=LOG_DIR):
         hdlr.setFormatter(formatter)
 
     logger.addHandler(hdlr)
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging_level)
