@@ -33,9 +33,9 @@ ETCD_AUTHORITY_ENV = "ETCD_AUTHORITY"
 if ETCD_AUTHORITY_ENV not in os.environ:
     os.environ[ETCD_AUTHORITY_ENV] = 'kubernetes-master:6666'
 
-# Append to existing env, to avoid losing PATH etc.
-# Need to edit the path here since calicoctl loads client on import.
-CALICOCTL_PATH = os.environ.get('CALICOCTL_PATH', '/usr/bin/calicoctl')
+# Get the desired calicoctl location.  By default, we search the PATH for 
+# the location of calicoctl, unless overridden by this variable.
+CALICOCTL_PATH = os.environ.get('CALICOCTL_PATH', 'calicoctl')
 
 KUBE_API_ROOT = os.environ.get('KUBE_API_ROOT',
                                'http://kubernetes-master:8080/api/v1/')
