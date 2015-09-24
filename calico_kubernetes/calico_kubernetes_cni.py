@@ -12,36 +12,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from __future__ import print_function
 import socket
-import functools
 import logging
 import json
 import os
 import sys
 
-from subprocess import check_output, CalledProcessError, check_call
 from netaddr import IPAddress, IPNetwork, AddrFormatError
-
-from pycalico import netns
+from docker import Client
+from docker.errors import APIError
+import pycalico
+from pycalico.netns import PidNamespace,remove_veth
 from pycalico.ipam import IPAMClient, SequentialAssignment
-from pycalico.netns import Namespace
 from pycalico.datastore_datatypes import Rules, IPPool
-from pycalico.datastore import IF_PREFIX
-from pycalico.datastore_errors import PoolNotFound
+from logutils import configure_logger
 
 ETCD_AUTHORITY_ENV = 'ETCD_AUTHORITY'
-LOG_DIR = '/var/log/calico/calico-rkt'
+LOG_DIR = '/var/log/calico/kubernetes'
 
-ORCHESTRATOR_ID = "rkt"
+ORCHESTRATOR_ID = "docker"
 HOSTNAME = socket.gethostname()
-NETNS_ROOT = '/var/lib/rkt/pods/run'
 
 _log = logging.getLogger(__name__)
 datastore_client = IPAMClient()
+docker_client = Client()
 
 
-def calico_cni(args):
+def calico_kubernetes_cni(args):
     """
     Orchestrate top level function
 
@@ -51,12 +48,14 @@ def calico_cni(args):
         create(args)
     elif args['command'] == 'DEL':
         delete(args)
+    else:
+        _log.warning('Unknown command: %s', args['command'])
 
 
 def create(args):
     """"
-    Handle rkt pod-create event.
-    Print allocated IP as json to STDOUT (req for rkt)
+    Handle a pod-create event.
+    Print allocated IP as json to STDOUT
 
     :param args: dict of values to pass to other functions (see: validate_args)
     """
@@ -67,10 +66,8 @@ def create(args):
     subnet = args['subnet']
 
     _log.info('Configuring pod %s' % container_id)
-    netns_path = '%s/%s/%s' % (NETNS_ROOT, container_id, netns)
 
     endpoint = _create_calico_endpoint(container_id=container_id,
-                                       netns_path=netns_path,
                                        interface=interface,
                                        subnet=subnet)
 
@@ -83,7 +80,7 @@ def create(args):
                 "ip": "%s" % endpoint.ipv4_nets.copy().pop()
             }
         })
-    _log.info('Dumping info to rkt: %s' % dump)
+    _log.info('Dumping info to kubernetes: %s' % dump)
     print(dump)
 
     _log.info('Finished Creating pod %s' % container_id)
@@ -116,13 +113,12 @@ def delete(args):
             sys.exit(1)
 
 
-def _create_calico_endpoint(container_id, netns_path, interface, subnet):
+def _create_calico_endpoint(container_id, interface, subnet):
     """
     Configure the Calico interface for a pod.
     Return Endpoint and IP
 
     :param container_id (str):
-    :param netns_path (str): namespace path
     :param interface (str): iface to use
     :param subnet (str): Subnet to allocate IP to
     :rtype Endpoint: Endpoint created
@@ -143,7 +139,6 @@ def _create_calico_endpoint(container_id, netns_path, interface, subnet):
     endpoint = _container_add(hostname=HOSTNAME,
                               orchestrator_id=ORCHESTRATOR_ID,
                               container_id=container_id,
-                              netns_path=netns_path,
                               interface=interface,
                               subnet=subnet)
 
@@ -151,15 +146,14 @@ def _create_calico_endpoint(container_id, netns_path, interface, subnet):
     return endpoint
 
 
-def _container_add(hostname, orchestrator_id, container_id, netns_path, interface, subnet):
+def _container_add(hostname, orchestrator_id, container_id, interface, subnet):
     """
     Add a container to Calico networking
     Return Endpoint object and newly allocated IP
 
     :param hostname (str): Host for enndpoint allocation
-    :param orchestrator_id (str): Specifies orchestrator ('rkt')
+    :param orchestrator_id (str): Specifies orchestrator
     :param container_id (str):
-    :param netns_path (str): namespace path
     :param interface (str): iface to use
     :param subnet (str): Subnet to allocate IP to
     :rtype Endpoint: Endpoint created
@@ -169,6 +163,8 @@ def _container_add(hostname, orchestrator_id, container_id, netns_path, interfac
 
     # Create Endpoint object
     try:
+        _log.info("Creating endpoint with IP address %s for container %s",
+                  ip, container_id)
         ep = datastore_client.create_endpoint(HOSTNAME, ORCHESTRATOR_ID,
                                               container_id, [ip])
     except AddrFormatError:
@@ -177,10 +173,15 @@ def _container_add(hostname, orchestrator_id, container_id, netns_path, interfac
         datastore_client.unassign_address(pool, ip)
         sys.exit(1)
 
+    # Obtain the pid of the running container
+    pid = _get_container_pid(container_id)
+
     # Create the veth, move into the container namespace, add the IP and
     # set up the default routes.
-    ep.mac = ep.provision_veth(Namespace(netns_path), interface)
+    _log.info("Creating the veth with pid %s on interface %s", pid, interface)
+    ep.mac = ep.provision_veth(PidNamespace(pid), interface)
     datastore_client.set_endpoint(ep)
+
     return ep
 
 
@@ -189,7 +190,7 @@ def _container_remove(hostname, orchestrator_id, container_id):
     Remove the indicated container on this host from Calico networking
 
     :param hostname (str): Host for enndpoint allocation
-    :param orchestrator_id (str): Specifies orchestrator ('rkt')
+    :param orchestrator_id (str): Specifies orchestrator
     :param container_id (str):
     """
     # Find the endpoint ID. We need this to find any ACL rules
@@ -207,7 +208,7 @@ def _container_remove(hostname, orchestrator_id, container_id):
         datastore_client.unassign_address(None, net.ip)
 
     # Remove the endpoint
-    netns.remove_veth(endpoint.name)
+    remove_veth(endpoint.name)
 
     # Remove the container from the datastore.
     datastore_client.remove_workload(hostname=hostname,
@@ -288,6 +289,22 @@ def _assign_to_pool(subnet):
     _log.info("Using IP %s" % candidate)
 
     return pool, candidate
+
+
+def _get_container_info(container_id):
+    try:
+        info = docker_client.inspect_container(container_id)
+    except APIError as e:
+        if e.response.status_code == 404:
+            _log.error("Container %s was not found. Exiting.", container_id)
+        else:
+             _log.error(e.message)
+        sys.exit(1)
+    return info
+
+
+def _get_container_pid(container_id):
+    return _get_container_info(container_id)["State"]["Pid"]
 
 
 def validate_args(env, conf):
@@ -380,11 +397,15 @@ if __name__ == '__main__':
     # Setup logger
     if not os.path.exists(LOG_DIR):
         os.makedirs(LOG_DIR)
-    hdlr = logging.FileHandler(filename=LOG_DIR+'/calico-rkt.log')
+    hdlr = logging.FileHandler(filename=LOG_DIR+'/calico-kubernetes-cni.log')
     formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
     hdlr.setFormatter(formatter)
     _log.addHandler(hdlr)
-    _log.setLevel(logging.INFO)
+    _log.setLevel(logging.DEBUG)
+
+    pycalico_logger = logging.getLogger(pycalico.__name__)
+    configure_logger(pycalico_logger, logging.DEBUG, False)
+
 
     # Environment
     env = os.environ.copy()
@@ -397,4 +418,4 @@ if __name__ == '__main__':
     args = validate_args(env, conf_json)
 
     # Call plugin
-    calico_cni(args)
+    calico_kubernetes_cni(args)

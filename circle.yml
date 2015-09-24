@@ -19,7 +19,7 @@ dependencies:
 # If the build.tar exists, then load it into docker to take advantage of any cached layers.
     - if [[ -e ~/docker/build.tar ]]; then docker load -i ~/docker/build.tar; fi
 # Build the build image. Docker will use cached layers where it can.
-    - make kubernetesbuild.created 
+    - make binary
     - docker save --output ~/docker/build.tar calico/kubernetes-build
 
 test:

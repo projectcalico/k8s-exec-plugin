@@ -9,11 +9,11 @@ all: binary test
 test: ut
 
 # Build a new docker image to be used by binary or tests
-kubernetescnibuild.created: $(BUILD_FILES)
+buildcontainer.created: $(BUILD_FILES)
 	docker build -t calico/kubernetes-cni-build .
-	touch kubernetescnibuild.created
+	touch buildcontainer.created
 
-binary: kubernetescnibuild.created
+binary: buildcontainer.created
 	mkdir -p dist
 	chmod 777 `pwd`/dist
 	
@@ -23,9 +23,9 @@ binary: kubernetescnibuild.created
 	-v `pwd`/calico_kubernetes:/code/calico_kubernetes \
 	-v `pwd`/dist:/code/dist \
 	-e PYTHONPATH=/code/calico_kubernetes \
-	calico/kubernetes-cni-build pyinstaller calico_kubernetes/calico_cni.py -a -F -s --clean
+	calico/kubernetes-cni-build pyinstaller calico_kubernetes/calico_kubernetes_cni.py -a -F -s --clean
 
-ut: kubernetescnibuild.created
+ut: buildcontainer.created
 	docker run --rm -v `pwd`/calico_kubernetes:/code/calico_kubernetes \
 	-v `pwd`/nose.cfg:/code/nose.cfg \
 	calico/kubernetes-cni-build bash -c \
@@ -38,10 +38,11 @@ ut-circle: binary
 	# Circle also requires extra options for reporting.
 	docker run \
 	-v `pwd`/calico_kubernetes:/code/calico_kubernetes \
+	-v `pwd`/nose.cfg:/code/nose.cfg \
 	-v $(CIRCLE_TEST_REPORTS):/circle_output \
 	-e COVERALLS_REPO_TOKEN=$(COVERALLS_REPO_TOKEN) \
 	calico/kubernetes-cni-build bash -c \
-	'>/dev/null 2>&1 & \
+	'>/dev/null 2>&1 & PYTHONPATH=/code/calico_kubernetes \
 	nosetests calico_kubernetes/tests -c nose.cfg \
 	--with-xunit --xunit-file=/circle_output/output.xml; RC=$$?;\
 	[[ ! -z "$$COVERALLS_REPO_TOKEN" ]] && coveralls || true; exit $$RC'
