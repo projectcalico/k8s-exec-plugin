@@ -70,13 +70,11 @@ def create(args):
     netns = args['netns']
     interface = args['interface']
     net_name = args['name']
-    ipam_config = args['ipam']
 
     _log.info('Configuring pod %s' % container_id)
 
     endpoint = _create_calico_endpoint(container_id=container_id,
-                                       interface=interface,
-                                       ipam=ipam_config)
+                                       interface=interface)
 
     _set_profile_on_endpoint(endpoint=endpoint,
                              profile_name=net_name)
@@ -101,15 +99,13 @@ def delete(args):
     """
     container_id = args['container_id']
     net_name = args['name']
-    ipam_config = args['ipam']
 
     _log.info('Deleting pod %s' % container_id)
 
     # Remove the profile for the workload.
     _container_remove(hostname=HOSTNAME,
                       orchestrator_id=ORCHESTRATOR_ID,
-                      container_id=container_id,
-                      ipam=ipam_config)
+                      container_id=container_id)
 
     # Delete profile if only member
     if datastore_client.profile_exists(net_name) and \
