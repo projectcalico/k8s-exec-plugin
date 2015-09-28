@@ -148,14 +148,13 @@ def _create_calico_endpoint(container_id, interface, ipam):
     endpoint = _container_add(hostname=HOSTNAME,
                               orchestrator_id=ORCHESTRATOR_ID,
                               container_id=container_id,
-                              interface=interface,
-                              ipam=ipam)
+                              interface=interface)
 
     _log.info('Finished configuring network interface')
     return endpoint
 
 
-def _container_add(hostname, orchestrator_id, container_id, interface, ipam):
+def _container_add(hostname, orchestrator_id, container_id, interface):
     """
     Add a container to Calico networking
     Return Endpoint object and newly allocated IP
@@ -169,7 +168,7 @@ def _container_add(hostname, orchestrator_id, container_id, interface, ipam):
     """
     # Allocate and Assign ip address through datastore_client
     try:
-        ip = _call_ipam(ipam)
+        ip = _assign_ip_address()
     except CalledProcessError, e:
         _log.exception("Error assigning IP address using IPAM plugin")
         sys.exit(e.returncode)
@@ -196,7 +195,7 @@ def _container_add(hostname, orchestrator_id, container_id, interface, ipam):
     return ep
 
 
-def _container_remove(hostname, orchestrator_id, container_id, ipam):
+def _container_remove(hostname, orchestrator_id, container_id):
     """
     Remove the indicated container on this host from Calico networking
 
@@ -205,10 +204,7 @@ def _container_remove(hostname, orchestrator_id, container_id, ipam):
     :param container_id (str):
     """
     # Un-assign the IP address by calling out to the IPAM plugin
-    try:
-        _call_ipam(ipam)
-    except CalledProcessError:
-        _log.exception("IPAM failed to un-assign IP address")
+    _unassign_ip_address()
 
     # Find the endpoint ID. We need this to find any ACL rules
     try:
@@ -288,22 +284,56 @@ def _assign_default_rules(profile_name):
     _log.info("Finished applying default rules.")
 
 
-def _call_ipam(config):
+def _assign_ip_address():
+    """
+    Assigns and returns an IPv4 address using the IPAM plugin specified in CONFIG.
+    :return:
+    """
+    # May throw CalledProcessError - let it.  We may want to replace this with our own Exception.
+    result = _call_ipam_plugin()
+    _log.debug("IPAM plugin result: %s", result)
+
+    try:
+        # Load the response and get the assigned IP address.
+        result = json.loads(result)
+    except:
+        # TODO Catch correct exception
+        _log.exception("Failed to parse IPAM response, exiting")
+        sys.exit(1)
+
+    # The request was successful.  Get the IP.
+    _log.info("IPAM result: %s", result)
+    return IPNetwork(result["ipv4"]["ip"])
+
+
+def _unassign_ip_address():
+    """
+    Un-assigns the IP address for this container using the IPAM plugin specified in CONFIG.
+    :return:
+    """
+    # Try to un-assign the address.  Catch exceptions - we don't want to stop execution if
+    # we fail to un-assign the address.
+    _log.info("Un-assigning IP address")
+    try:
+        result = _call_ipam_plugin()
+        _log.debug("IPAM plugin result: %s", result)
+    except CalledProcessError:
+        _log.exception("IPAM plugin failed to un-assign IP address.")
+
+
+def _call_ipam_plugin():
     """
     Calls through to the specified IPAM plugin.
-
-    If this is an ADD operation, will return the assigned IP address..
-    If this is a DEL operation, will return None.
 
     :param config: IPAM config as specified in the CNI network configuration file.  A
         dictionary with the following form:
         {
           type: <IPAM TYPE>
         }
-    :return:
+    :return: Response from the IPAM plugin.
     """
     # Get the plugin type and location.
-    plugin_type = config['type']
+    plugin_type = CONFIG['ipam']['type']
     plugin_dir = os.environ.get('CNI_PATH')
     _log.info("IPAM plugin type: %s.  Plugin directory: %s", plugin_type, plugin_dir)
 
@@ -311,26 +341,9 @@ def _call_ipam(config):
     plugin_path = os.path.abspath(os.path.join(plugin_dir, plugin_type))
     _log.info("Using IPAM plugin at: %s", plugin_path)
 
-    # Execute the plugin and read the result.
-    result = check_output([plugin_path], stdin=CONFIG)
+    # Execute the plugin and return the result.
+    return check_output([plugin_path], stdin=CONFIG)
 
-    # If we're in delete mode, there is nothing more to do - the IP address has been
-    # unassigned successfully.
-    if env["CNI_COMMAND"] == "DEL":
-        _log.info("IP Address successfully unassigned using %s IPAM", plugin_type)
-        return
-
-    # We're in add mode - get the assigned IP address.
-    try:
-        result = json.loads(result)
-    except:
-        # TODO Catch correct exception
-        _log.exception("Failed to parse IPAM response, exiting")
-        sys.exit(1)
-
-    # Otherwise, the request was successful.  Get the IP.
-    _log.info("IPAM result: %s", result)
-    return IPNetwork(result["ipv4"]["ip"])
 
 def _get_container_info(container_id):
     try:
