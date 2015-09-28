@@ -118,14 +118,13 @@ def delete(args):
             sys.exit(1)
 
 
-def _create_calico_endpoint(container_id, interface, ipam):
+def _create_calico_endpoint(container_id, interface):
     """
     Configure the Calico interface for a pod.
     Return Endpoint and IP
 
     :param container_id (str):
     :param interface (str): iface to use
-    :param ipam (dict): IPAM configuration as specified in the network config file.
     :rtype Endpoint: Endpoint created
     """
     _log.info('Configuring Calico networking.')
@@ -159,7 +158,6 @@ def _container_add(hostname, orchestrator_id, container_id, interface):
     :param orchestrator_id (str): Specifies orchestrator
     :param container_id (str):
     :param interface (str): iface to use
-    :param ipam (dict): IPAM config to use as specified in the network config file.
     :rtype Endpoint: Endpoint created
     """
     # Allocate and Assign ip address through datastore_client
