@@ -26,7 +26,7 @@ from pycalico.netns import PidNamespace,remove_veth
 from pycalico.ipam import IPAMClient
 from pycalico.datastore_datatypes import Rules
 from logutils import configure_logger
-from subprocess import CalledProcessError, check_output
+from subprocess import CalledProcessError, PIPE, Popen
 
 ETCD_AUTHORITY_ENV = 'ETCD_AUTHORITY'
 LOG_DIR = '/var/log/calico/kubernetes'
@@ -34,6 +34,10 @@ LOG_DIR = '/var/log/calico/kubernetes'
 ORCHESTRATOR_ID = "docker"
 HOSTNAME = socket.gethostname()
 
+ENV=None
+"""
+Holds the environment dictionary.
+"""
 
 CONFIG=None
 """
@@ -209,11 +213,6 @@ def _container_remove(hostname, orchestrator_id, container_id):
         _log.error("Container %s doesn't contain any endpoints" % container_id)
         sys.exit(1)
 
-    # Remove any IP address assignments that this endpoint has
-    for net in endpoint.ipv4_nets | endpoint.ipv6_nets:
-        assert net.size == 1, "Only 1 address allowed per endpoint. Found in network: %s" % net
-        datastore_client.unassign_address(None, net.ip)
-
     # Remove the endpoint
     remove_veth(endpoint.name)
 
@@ -328,7 +327,7 @@ def _call_ipam_plugin():
     """
     # Get the plugin type and location.
     plugin_type = CONFIG['ipam']['type']
-    plugin_dir = os.environ.get('CNI_PATH')
+    plugin_dir = ENV.get('CNI_PATH')
     _log.info("IPAM plugin type: %s.  Plugin directory: %s", plugin_type, plugin_dir)
 
     # Find the correct plugin based on the given type.
@@ -336,7 +335,10 @@ def _call_ipam_plugin():
     _log.info("Using IPAM plugin at: %s", plugin_path)
 
     # Execute the plugin and return the result.
-    return check_output([plugin_path], stdin=CONFIG)
+    p = Popen(plugin_path, stdin=PIPE, stdout=PIPE, stderr=PIPE)
+    stdout, stderr= p.communicate(json.dumps(CONFIG))
+    _log.info("IPAM output: \nstdout: %s\nstderr: %s", stdout, stderr)
+    return stdout
 
 
 def _get_container_info(container_id):
@@ -457,7 +459,8 @@ if __name__ == '__main__':
 
 
     # Environment
-    env = os.environ.copy()
+    global ENV
+    ENV = os.environ.copy()
 
     # Populate a global variable with the config read from stdin so that
     global CONFIG
@@ -465,7 +468,7 @@ if __name__ == '__main__':
     CONFIG = json.loads(conf_raw).copy()
 
     # Scrub args
-    args = validate_args(env, CONFIG)
+    args = validate_args(ENV, CONFIG)
 
     # Call plugin
     calico_kubernetes_cni(args)

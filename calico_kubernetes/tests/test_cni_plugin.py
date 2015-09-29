@@ -51,6 +51,7 @@ ARGS = {
 }
 
 
+
 class RktPluginTest(unittest.TestCase):
 
     @patch('calico_kubernetes_cni.create',
@@ -88,8 +89,7 @@ class RktPluginTest(unittest.TestCase):
         calico_kubernetes_cni.create(ARGS)
 
         m_create_ep.assert_called_once_with(container_id=ARGS['container_id'],
-                                            interface=ARGS['interface'],
-                                            subnet=ARGS['subnet'])
+                                            interface=ARGS['interface'])
         m_set_profile.assert_called_once_with(endpoint=mock_ep,
                                               profile_name="test")
 
@@ -106,8 +106,7 @@ class RktPluginTest(unittest.TestCase):
         id_, path_ = 'testcontainer', 'path/to/ns'
 
         calico_kubernetes_cni._create_calico_endpoint(container_id=id_,
-                                           interface=ARGS['interface'],
-                                           subnet=ARGS['subnet'])
+                                           interface=ARGS['interface'])
 
         m_client.get_endpoint.assert_called_once_with(hostname=m_host,
                                                       orchestrator_id=ORCHESTRATOR_ID,
@@ -115,8 +114,7 @@ class RktPluginTest(unittest.TestCase):
         m_con_add.assert_called_once_with(hostname=m_host,
                                           orchestrator_id=ORCHESTRATOR_ID,
                                           container_id=id_,
-                                          interface=ARGS['interface'],
-                                          subnet=ARGS['subnet'])
+                                          interface=ARGS['interface'])
 
     @patch("sys.exit",
            autospec=True)
@@ -132,49 +130,52 @@ class RktPluginTest(unittest.TestCase):
         id_, path_ = 'testcontainer', 'path/to/ns'
 
         calico_kubernetes_cni._create_calico_endpoint(container_id=id_,
-                                           interface=ARGS['interface'],
-                                           subnet=ARGS['subnet'])
+                                           interface=ARGS['interface'])
 
         m_client.get_endpoint.assert_called_once_with(hostname=m_host,
                                                       orchestrator_id=ORCHESTRATOR_ID,
                                                       workload_id=id_)
         m_sys_exit.assert_called_once_with(1)
 
-    @patch('calico_kubernetes_cni.HOSTNAME',
-           autospec=True)
-    @patch('calico_kubernetes_cni.datastore_client',
-           autospec=True)
-    @patch('calico_kubernetes_cni._assign_to_pool', return_value=(IPPool('1.2.0.0/16'), IPAddress('1.2.3.4')),
-           autospec=True)
-    @patch('calico_kubernetes_cni._get_container_pid', return_value='12345',
-           autospec=True)
-    def test_container_add(self, m_get_container_pid, m_assign_pool, m_client, m_host):
+    @patch('calico_kubernetes_cni._assign_ip_address', autospec=True)
+    @patch('calico_kubernetes_cni.HOSTNAME', autospec=True)
+    @patch('calico_kubernetes_cni.datastore_client', autospec=True)
+    @patch('calico_kubernetes_cni._get_container_pid', return_value='12345', autospec=True)
+    def test_container_add(self, m_get_container_pid, m_client, m_host, m_assign):
         m_ep = Mock()
         m_client.create_endpoint.return_value = m_ep
         m_ep.provision_veth.return_value = 'macaddress'
 
         id_= 'testcontainer'
+        addr = IPAddress('1.2.3.4')
+        m_assign.return_value = addr 
 
         calico_kubernetes_cni._container_add(hostname=m_host,
                                   orchestrator_id=ORCHESTRATOR_ID,
                                   container_id=id_,
-                                  interface=ARGS['interface'],
-                                  subnet=ARGS['subnet'])
+                                  interface=ARGS['interface'])
 
-        m_assign_pool.assert_called_once_with(ARGS['subnet'])
+        m_assign.assert_called_once_with()
         m_client.create_endpoint.assert_called_once_with(
-            m_host, ORCHESTRATOR_ID, id_, [IPAddress('1.2.3.4')])
+            m_host, ORCHESTRATOR_ID, id_, [addr])
         m_get_container_pid.assert_called_once_with(id_)
         m_ep.provision_veth.assert_called_once()
         m_client.set_endpoint.assert_called_once_with(m_ep)
 
-    @patch('calico_kubernetes_cni.HOSTNAME',
-           autospec=True)
-    @patch('calico_kubernetes_cni.datastore_client',
-           autospec=True)
-    @patch('pycalico.netns',
-           autospec=True)
-    def test_container_remove(self, m_netns, m_client, m_host):
+    @patch.object(calico_kubernetes_cni, "CONFIG", CONF)
+    @patch.object(calico_kubernetes_cni, "ENV", ENV)
+    @patch('calico_kubernetes_cni.Popen', autospec=True)
+    def test_call_ipam(self, m_popen):
+        """
+        """
+        # Mock out response from IPAM
+        m_popen("").communicate.return_value = ("stdout indicates OK", None)
+
+    @patch('calico_kubernetes_cni._unassign_ip_address', autospec=True)
+    @patch('calico_kubernetes_cni.HOSTNAME', autospec=True)
+    @patch('calico_kubernetes_cni.datastore_client', autospec=True)
+    @patch('pycalico.netns', autospec=True)
+    def test_container_remove(self, m_netns, m_client, m_host, m_unassign):
         m_ep = Mock()
         m_ep.ipv4_nets = set()
         m_ep.ipv4_nets.add(IPNetwork('1.2.3.4/32'))
@@ -187,14 +188,13 @@ class RktPluginTest(unittest.TestCase):
         calico_kubernetes_cni._container_remove(hostname=m_host,
                                      orchestrator_id=ORCHESTRATOR_ID,
                                      container_id=id_)
+        m_unassign.assert_called_once_with()
         m_client.get_endpoint.assert_called_once_with(hostname=m_host,
                                                       orchestrator_id=ORCHESTRATOR_ID,
                                                       workload_id=id_)
         m_client.remove_workload.assert_called_once_with(hostname=m_host,
                                                          orchestrator_id=ORCHESTRATOR_ID,
                                                          workload_id=id_)
-        m_client.unassign_address.assert_called_once_with(
-            None, IPAddress('1.2.3.4'))
 
     @patch('calico_kubernetes_cni.datastore_client',
            autospec=True)
@@ -226,12 +226,3 @@ class RktPluginTest(unittest.TestCase):
 
         m_client.get_profile.assert_called_once_with(p_name)
         m_client.profile_update_rules.assert_called_once_with(m_profile)
-
-    @patch('calico_kubernetes_cni.datastore_client',
-           autospec=True)
-    @patch('pycalico.ipam.SequentialAssignment.allocate',
-           autospec=True)
-    def test_assign_to_pool(self, m_seq, m_client):
-        m_seq.return_value = '10.22.0.1'
-        calico_kubernetes_cni._assign_to_pool(subnet=ARGS['subnet'])
-        m_client.add_ip_pool.assert_called_once_with(4, IPPool("10.22.0.0/16"))
