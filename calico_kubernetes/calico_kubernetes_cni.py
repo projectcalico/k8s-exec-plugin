@@ -34,12 +34,12 @@ LOG_DIR = '/var/log/calico/kubernetes'
 ORCHESTRATOR_ID = "docker"
 HOSTNAME = socket.gethostname()
 
-ENV=None
+ENV = None
 """
 Holds the environment dictionary.
 """
 
-CONFIG=None
+CONFIG = None
 """
 Holds the CNI network config loaded from stdin.
 """
