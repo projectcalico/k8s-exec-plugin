@@ -169,7 +169,16 @@ class RktPluginTest(unittest.TestCase):
         """
         """
         # Mock out response from IPAM
-        m_popen("").communicate.return_value = ("stdout indicates OK", None)
+        stdout = "IPAM plugin stdout"
+        stderr = None
+        m_popen("").communicate.return_value = (stdout, stderr)
+        m_popen.reset_mock()
+
+        # Call method under test
+        result = calico_kubernetes_cni._call_ipam_plugin()
+
+        # Assert
+        self.assertEquals(result, stdout)
 
     @patch('calico_kubernetes_cni._unassign_ip_address', autospec=True)
     @patch('calico_kubernetes_cni.HOSTNAME', autospec=True)
