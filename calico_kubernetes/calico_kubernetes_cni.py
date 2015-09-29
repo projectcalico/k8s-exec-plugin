@@ -289,8 +289,7 @@ def _assign_ip_address():
     try:
         # Load the response and get the assigned IP address.
         result = json.loads(result)
-    except:
-        # TODO Catch correct exception
+    except ValueError:
         _log.exception("Failed to parse IPAM response, exiting")
         sys.exit(1)
 
