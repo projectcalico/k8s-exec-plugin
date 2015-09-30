@@ -62,3 +62,6 @@ target/
 
 # Pycharm stuff
 .idea/
+
+# Build markers
+*.created

@@ -710,10 +710,11 @@ class NetworkPlugin(object):
         return tag
 
 
-if __name__ == '__main__':
-    configure_logger(logger, LOG_LEVEL, True)
-    configure_logger(pycalico_logger, LOG_LEVEL, False)
-
+def main():
+    """
+    Runs the plugin.
+    """
+    logger.info('Plugin Args: %s', sys.argv)
     mode = sys.argv[1]
 
     if mode == 'init':
@@ -724,7 +725,6 @@ if __name__ == '__main__':
         pod_name = sys.argv[3].replace('/', '_')
         docker_id = sys.argv[4]
 
-        logger.info('Args: %s', sys.argv)
         logger.info("Using LOG_LEVEL=%s", LOG_LEVEL)
         logger.info("Using ETCD_AUTHORITY=%s", os.environ[ETCD_AUTHORITY_ENV])
         logger.info("Using CALICOCTL_PATH=%s", CALICOCTL_PATH)
@@ -741,3 +741,27 @@ if __name__ == '__main__':
         elif mode == 'status':
             logger.info('Executing Calico pod-status hook')
             NetworkPlugin().status(namespace, pod_name, docker_id)
+
+
+if __name__ == '__main__':
+    # Configure logging
+    configure_logger(logger, LOG_LEVEL, True)
+    configure_logger(pycalico_logger, LOG_LEVEL, False)
+
+    # Try to run the plugin, logging out any BaseExceptions raised.
+    logger.info("Begin Calico network plugin execution")
+    rc = 0
+    try:
+        main()
+    except SystemExit:
+        # If a SystemExit is thrown, we've already handled the error and have called sys.exit()
+        # No need to produce a duplicate exception message, just set the return code to 1.
+        rc = 1
+    except BaseException:
+        # Log the exception and set the return code to 1.
+        logger.exception("Unhandled Exception killed plugin")
+        rc = 1
+    finally:
+        # Log that we've finished, and exit with the correct return code.
+        logger.info("Calico network plugin execution complete")
+        sys.exit(rc)
