@@ -23,15 +23,26 @@ from docker import Client
 from docker.errors import APIError
 import pycalico
 from pycalico.netns import PidNamespace,remove_veth
-from pycalico.ipam import IPAMClient, SequentialAssignment
-from pycalico.datastore_datatypes import Rules, IPPool
+from pycalico.ipam import IPAMClient
+from pycalico.datastore_datatypes import Rules
 from logutils import configure_logger
+from subprocess import CalledProcessError, PIPE, Popen
 
 ETCD_AUTHORITY_ENV = 'ETCD_AUTHORITY'
 LOG_DIR = '/var/log/calico/kubernetes'
 
 ORCHESTRATOR_ID = "docker"
 HOSTNAME = socket.gethostname()
+
+ENV = None
+"""
+Holds the environment dictionary.
+"""
+
+CONFIG = None
+"""
+Holds the CNI network config loaded from stdin.
+"""
 
 _log = logging.getLogger(__name__)
 datastore_client = IPAMClient()
@@ -63,13 +74,11 @@ def create(args):
     netns = args['netns']
     interface = args['interface']
     net_name = args['name']
-    subnet = args['subnet']
 
     _log.info('Configuring pod %s' % container_id)
 
     endpoint = _create_calico_endpoint(container_id=container_id,
-                                       interface=interface,
-                                       subnet=subnet)
+                                       interface=interface)
 
     _set_profile_on_endpoint(endpoint=endpoint,
                              profile_name=net_name)
@@ -113,14 +122,13 @@ def delete(args):
             sys.exit(1)
 
 
-def _create_calico_endpoint(container_id, interface, subnet):
+def _create_calico_endpoint(container_id, interface):
     """
     Configure the Calico interface for a pod.
     Return Endpoint and IP
 
     :param container_id (str):
     :param interface (str): iface to use
-    :param subnet (str): Subnet to allocate IP to
     :rtype Endpoint: Endpoint created
     """
     _log.info('Configuring Calico networking.')
@@ -139,14 +147,13 @@ def _create_calico_endpoint(container_id, interface, subnet):
     endpoint = _container_add(hostname=HOSTNAME,
                               orchestrator_id=ORCHESTRATOR_ID,
                               container_id=container_id,
-                              interface=interface,
-                              subnet=subnet)
+                              interface=interface)
 
     _log.info('Finished configuring network interface')
     return endpoint
 
 
-def _container_add(hostname, orchestrator_id, container_id, interface, subnet):
+def _container_add(hostname, orchestrator_id, container_id, interface):
     """
     Add a container to Calico networking
     Return Endpoint object and newly allocated IP
@@ -155,11 +162,14 @@ def _container_add(hostname, orchestrator_id, container_id, interface, subnet):
     :param orchestrator_id (str): Specifies orchestrator
     :param container_id (str):
     :param interface (str): iface to use
-    :param subnet (str): Subnet to allocate IP to
     :rtype Endpoint: Endpoint created
     """
     # Allocate and Assign ip address through datastore_client
-    pool, ip = _assign_to_pool(subnet)
+    try:
+        ip = _assign_ip_address()
+    except CalledProcessError, e:
+        _log.exception("Error assigning IP address using IPAM plugin")
+        sys.exit(e.returncode)
 
     # Create Endpoint object
     try:
@@ -168,9 +178,7 @@ def _container_add(hostname, orchestrator_id, container_id, interface, subnet):
         ep = datastore_client.create_endpoint(HOSTNAME, ORCHESTRATOR_ID,
                                               container_id, [ip])
     except AddrFormatError:
-        _log.error("This node is not configured for IPv%d. Unassigning IP "
-                   "address %s then exiting." % ip.version, ip)
-        datastore_client.unassign_address(pool, ip)
+        _log.error("This node is not configured for IPv%d, exiting.", ip.version)
         sys.exit(1)
 
     # Obtain the pid of the running container
@@ -193,6 +201,9 @@ def _container_remove(hostname, orchestrator_id, container_id):
     :param orchestrator_id (str): Specifies orchestrator
     :param container_id (str):
     """
+    # Un-assign the IP address by calling out to the IPAM plugin
+    _unassign_ip_address()
+
     # Find the endpoint ID. We need this to find any ACL rules
     try:
         endpoint = datastore_client.get_endpoint(hostname=hostname,
@@ -201,11 +212,6 @@ def _container_remove(hostname, orchestrator_id, container_id):
     except KeyError:
         _log.error("Container %s doesn't contain any endpoints" % container_id)
         sys.exit(1)
-
-    # Remove any IP address assignments that this endpoint has
-    for net in endpoint.ipv4_nets | endpoint.ipv6_nets:
-        assert net.size == 1, "Only 1 address allowed per endpoint. Found in network: %s" % net
-        datastore_client.unassign_address(None, net.ip)
 
     # Remove the endpoint
     remove_veth(endpoint.name)
@@ -271,24 +277,71 @@ def _assign_default_rules(profile_name):
     _log.info("Finished applying default rules.")
 
 
-def _assign_to_pool(subnet):
+def _assign_ip_address():
     """
-    Take subnet (str), create IP pool in datastore if none exists.
-    Allocate next available IP in pool
-
-    :param subnet (str): Subnet to create pool from
-    :rtype: (IPPool, IPAddress)
+    Assigns and returns an IPv4 address using the IPAM plugin specified in CONFIG.
+    :return:
     """
-    pool = IPPool(subnet)
-    version = IPNetwork(subnet).version
-    datastore_client.add_ip_pool(version, pool)
-    candidate = SequentialAssignment().allocate(pool)
-    candidate = IPAddress(candidate)
+    # May throw CalledProcessError - let it.  We may want to replace this with our own Exception.
+    result = _call_ipam_plugin()
+    _log.debug("IPAM plugin result: %s", result)
 
-    _log.info("Using Pool %s" % pool)
-    _log.info("Using IP %s" % candidate)
+    try:
+        # Load the response and get the assigned IP address.
+        result = json.loads(result)
+    except ValueError:
+        _log.exception("Failed to parse IPAM response, exiting")
+        sys.exit(1)
 
-    return pool, candidate
+    # The request was successful.  Get the IP.
+    _log.info("IPAM result: %s", result)
+    return IPNetwork(result["ipv4"]["ip"])
+
+
+def _unassign_ip_address():
+    """
+    Un-assigns the IP address for this container using the IPAM plugin specified in CONFIG.
+    :return:
+    """
+    # Try to un-assign the address.  Catch exceptions - we don't want to stop execution if
+    # we fail to un-assign the address.
+    _log.info("Un-assigning IP address")
+    try:
+        result = _call_ipam_plugin()
+        _log.debug("IPAM plugin result: %s", result)
+    except CalledProcessError:
+        _log.exception("IPAM plugin failed to un-assign IP address.")
+
+
+def _call_ipam_plugin():
+    """
+    Calls through to the specified IPAM plugin.
+
+    :param config: IPAM config as specified in the CNI network configuration file.  A
+        dictionary with the following form:
+        {
+          type: <IPAM TYPE>
+        }
+    :return: Response from the IPAM plugin.
+    """
+    # Get the plugin type and location.
+    plugin_type = CONFIG['ipam']['type']
+    plugin_dir = ENV.get('CNI_PATH')
+    _log.info("IPAM plugin type: %s.  Plugin directory: %s", plugin_type, plugin_dir)
+
+    # Find the correct plugin based on the given type.
+    plugin_path = os.path.abspath(os.path.join(plugin_dir, plugin_type))
+    _log.info("Using IPAM plugin at: %s", plugin_path)
+
+    if not os.path.isfile(plugin_path):
+        _log.error("Could not find IPAM plugin %s at location %s", plugin_type, plugin_dir)
+        sys.exit(1)
+
+    # Execute the plugin and return the result.
+    p = Popen(plugin_path, stdin=PIPE, stdout=PIPE, stderr=PIPE)
+    stdout, stderr= p.communicate(json.dumps(CONFIG))
+    _log.info("IPAM output: \nstdout: %s\nstderr: %s", stdout, stderr)
+    return stdout
 
 
 def _get_container_info(container_id):
@@ -384,9 +437,10 @@ def validate_args(env, conf):
         sys.exit(1)
 
     try:
-        args['subnet'] = conf['ipam']['subnet']
+        args['ipam'] = conf['ipam']
+        _ = args['ipam']['type']
     except KeyError:
-        _log.error('No Subnet in Network Config')
+        _log.error('No IPAM specified in Network Config')
         sys.exit(1)
 
     _log.debug('Validated Args: %s' % args)
@@ -406,16 +460,17 @@ if __name__ == '__main__':
     pycalico_logger = logging.getLogger(pycalico.__name__)
     configure_logger(pycalico_logger, logging.DEBUG, False)
 
-
     # Environment
-    env = os.environ.copy()
+    global ENV
+    ENV = os.environ.copy()
 
-    # STDIN args
+    # Populate a global variable with the config read from stdin so that
+    global CONFIG
     conf_raw = ''.join(sys.stdin.readlines()).replace('\n', '')
-    conf_json = json.loads(conf_raw).copy()
+    CONFIG = json.loads(conf_raw).copy()
 
     # Scrub args
-    args = validate_args(env, conf_json)
+    args = validate_args(ENV, CONFIG)
 
     # Call plugin
     calico_kubernetes_cni(args)
