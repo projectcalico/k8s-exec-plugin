@@ -14,7 +14,7 @@ from netaddr import IPAddress, AddrFormatError
 from logutils import configure_logger
 import pycalico
 from pycalico import netns
-from pycalico.datastore import IF_PREFIX, DatastoreClient
+from pycalico.datastore import IF_PREFIX
 from pycalico.util import generate_cali_interface_name, get_host_ips
 from pycalico.ipam import IPAMClient
 from pycalico.block import AlreadyAssignedError
