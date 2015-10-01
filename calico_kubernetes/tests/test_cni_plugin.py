@@ -165,7 +165,8 @@ class RktPluginTest(unittest.TestCase):
     @patch.object(calico_kubernetes_cni, "CONFIG", CONF)
     @patch.object(calico_kubernetes_cni, "ENV", ENV)
     @patch('calico_kubernetes_cni.Popen', autospec=True)
-    def test_call_ipam(self, m_popen):
+    @patch('os.path.isfile', autospec=True)
+    def test_call_ipam(self, m_os_isfile, m_popen):
         """
         """
         # Mock out response from IPAM

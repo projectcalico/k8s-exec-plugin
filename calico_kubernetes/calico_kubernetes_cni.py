@@ -333,6 +333,10 @@ def _call_ipam_plugin():
     plugin_path = os.path.abspath(os.path.join(plugin_dir, plugin_type))
     _log.info("Using IPAM plugin at: %s", plugin_path)
 
+    if not os.path.isfile(plugin_path):
+        _log.error("Could not find IPAM plugin %s at location %s", plugin_type, plugin_dir)
+        sys.exit(1)
+
     # Execute the plugin and return the result.
     p = Popen(plugin_path, stdin=PIPE, stdout=PIPE, stderr=PIPE)
     stdout, stderr= p.communicate(json.dumps(CONFIG))
@@ -455,7 +459,6 @@ if __name__ == '__main__':
 
     pycalico_logger = logging.getLogger(pycalico.__name__)
     configure_logger(pycalico_logger, logging.DEBUG, False)
-
 
     # Environment
     global ENV
