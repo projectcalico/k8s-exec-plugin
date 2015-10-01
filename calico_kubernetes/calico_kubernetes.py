@@ -14,7 +14,7 @@ from netaddr import IPAddress, AddrFormatError
 from logutils import configure_logger
 import pycalico
 from pycalico import netns
-from pycalico.datastore import IF_PREFIX, DatastoreClient
+from pycalico.datastore import IF_PREFIX
 from pycalico.util import generate_cali_interface_name, get_host_ips
 from pycalico.ipam import IPAMClient
 from pycalico.block import AlreadyAssignedError
@@ -115,7 +115,7 @@ class NetworkPlugin(object):
                 workload_id=self.docker_id
             )
         except KeyError:
-            logger.error("Container %s doesn't contain any endpoints" % self.docker_id)
+            logger.error("Container %s doesn't contain any endpoints", self.docker_id)
             sys.exit(1)
 
         # Retrieve IPAddress from the attached IPNetworks on the endpoint
@@ -422,7 +422,7 @@ class NetworkPlugin(object):
     def _get_pod_config(self):
         """Get the list of pods from the Kube API server."""
         pods = self._get_api_path('pods')
-        logger.debug('Got pods %s' % pods)
+        logger.debug('Got pods %s', pods)
 
         for pod in pods:
             logger.debug('Processing pod %s', pod)
@@ -477,7 +477,7 @@ class NetworkPlugin(object):
             else:
                 return ""
 
-        logger.info('Got kubernetes_auth: ' + json_string)
+        logger.info('Got kubernetes_auth: %s', json_string)
         auth_data = json.loads(json_string)
         return auth_data['BearerToken']
 
@@ -603,7 +603,7 @@ class NetworkPlugin(object):
 
         # Call calicoctl to populate outbound rules
         for rule in outbound_rules:
-            logger.info('applying outbound rule \n%s' % rule)
+            logger.info('applying outbound rule \n%s', rule)
             try:
                 self.calicoctl('profile', self.profile_name, 'rule', 'add', 'outbound', rule)
             except sh.ErrorReturnCode as e:
@@ -637,7 +637,7 @@ class NetworkPlugin(object):
         ns_tag = self._get_namespace_tag(pod)
 
         if ns_tag:
-            logger.info('Adding tag %s' % ns_tag)
+            logger.info('Adding tag %s', ns_tag)
             profile.tags.add(ns_tag)
         else:
             logger.warning('Namespace tag cannot be generated')
@@ -647,10 +647,10 @@ class NetworkPlugin(object):
         if labels:
             for k, v in labels.iteritems():
                 tag = self._label_to_tag(k, v)
-                logger.info('Adding tag ' + tag)
+                logger.info('Adding tag %s', tag)
                 profile.tags.add(tag)
         else:
-            logger.warning('No labels found in pod %s' % pod)
+            logger.warning('No labels found in pod %s', pod)
 
         self._datastore_client.profile_update_tags(profile)
 
@@ -724,7 +724,7 @@ if __name__ == '__main__':
         pod_name = sys.argv[3].replace('/', '_')
         docker_id = sys.argv[4]
 
-        logger.info('Args: %s' % sys.argv)
+        logger.info('Args: %s', sys.argv)
         logger.info("Using LOG_LEVEL=%s", LOG_LEVEL)
         logger.info("Using ETCD_AUTHORITY=%s", os.environ[ETCD_AUTHORITY_ENV])
         logger.info("Using CALICOCTL_PATH=%s", CALICOCTL_PATH)
