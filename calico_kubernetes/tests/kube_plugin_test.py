@@ -21,6 +21,7 @@ from docker.errors import APIError
 from calico_kubernetes import calico_kubernetes
 from pycalico.datastore import IF_PREFIX
 from pycalico.datastore_datatypes import Profile, Endpoint
+from pycalico.block import AlreadyAssignedError
 
 TEST_HOST = calico_kubernetes.HOSTNAME
 TEST_ORCH_ID = calico_kubernetes.ORCHESTRATOR_ID
@@ -196,12 +197,8 @@ class NetworkPluginTest(unittest.TestCase):
         with patch.object(self.plugin, '_datastore_client',
                 autospec=True) as m_datastore_client:
             # Set up arguments
-            container_name = 'container_name'
-            workload_id = 'workload_id'
             pid = 'pid'
             interface = 'eth0'
-            hostname = TEST_HOST
-            orchestrator_id = TEST_ORCH_ID
 
             # Call method under test
             self.assertRaises(SystemExit, self.plugin._container_add, pid, interface)
@@ -224,7 +221,7 @@ class NetworkPluginTest(unittest.TestCase):
             orchestrator_id = TEST_ORCH_ID
 
             # Call method under test
-            test_return = self.plugin._container_remove()
+            self.plugin._container_remove()
 
             # Assert
             m_datastore_client.get_endpoint.assert_called_once_with(
@@ -243,10 +240,6 @@ class NetworkPluginTest(unittest.TestCase):
         """
         with patch.object(self.plugin, '_datastore_client', autospec=True) as m_datastore_client:
             m_datastore_client.get_endpoint.side_effect = KeyError
-
-            # Set up arguments
-            hostname = TEST_HOST
-            orchestrator_id = TEST_ORCH_ID
 
             # Call method under test
             self.assertRaises(SystemExit, self.plugin._container_remove)
@@ -327,6 +320,30 @@ class NetworkPluginTest(unittest.TestCase):
 
             # Assert
             m_get_container_info.assert_called_once_with(container_name)
+
+    def test_assign_container_ip_docker_already_assigned(self):
+        with patch.object(self.plugin, "_datastore_client") as m_ds_client, \
+            patch.object(self.plugin, "_read_docker_ip") as m_read_ip:
+
+            # Don't use CALICO_IPAM for this test.
+            calico_kubernetes.CALICO_IPAM = "false"
+
+            # Mock the Docker IP
+            docker_ip = "172.12.23.4"
+            m_read_ip.return_value = docker_ip
+
+            # Mock out assignment - already assigned for first call,
+            # not assigned on the second.
+            m_ds_client.assign_ip.side_effect = iter([AlreadyAssignedError, None])
+
+            # Run method under test
+            ip = self.plugin._assign_container_ip()
+
+            # Assert we release the IP.
+            m_ds_client.release_ips.assert_called_once_with(set([docker_ip]))
+
+            # Assert we return the Docker IP
+            self.assertEqual(ip, docker_ip)
 
     def test_get_node_ip_no_host_ips(self):
         """

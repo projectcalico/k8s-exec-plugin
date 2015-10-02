@@ -10,7 +10,7 @@ from subprocess import check_output, CalledProcessError, check_call
 import requests
 import sh
 import logging
-from netaddr import IPAddress, AddrFormatError
+from netaddr import IPAddress, IPNetwork, AddrFormatError
 from logutils import configure_logger
 import pycalico
 from pycalico import netns
@@ -277,29 +277,64 @@ class NetworkPlugin(object):
 
         :return IPAddress which has been assigned
         """
+        def _assign(ip):
+            """
+            Local helper function for assigning an IP and checking for errors.
+            Only used when operating with CALICO_IPAM=false
+            """
+            try:
+                logger.info("Attempting to assign IP %s", ip)
+                self._datastore_client.assign_ip(ip, str(self.docker_id), None)
+            except (ValueError, RuntimeError):
+                logger.exception("Failed to assign IPAddress %s", ip)
+                sys.exit(1)
+
         if CALICO_IPAM == 'true':
-            # Assign ip address through IPAM Client
             logger.info("Using Calico IPAM")
             try:
-                ip_list, ipv6_addrs = self._datastore_client.auto_assign_ips(
-                    1, 0, self.docker_id, None)
-                ip = ip_list[0]
-                logger.debug("ip_list is %s; ipv6_addrs is %s",
-                             ip_list, ipv6_addrs)
-                assert not ipv6_addrs
+                ipv4s, ipv6s = self._datastore_client.auto_assign_ips(1, 0,
+                                                        self.docker_id, None)
+                ip = ipv4s[0]
+                logger.debug("IPAM assigned ipv4=%s; ipv6= %s", ipv4s, ipv6s)
             except RuntimeError as err:
                 logger.error("Cannot auto assign IPAddress: %s", err.message)
                 sys.exit(1)
-
         else:
             logger.info("Using docker assigned IP address")
             ip = self._read_docker_ip()
-            try:
-                self._datastore_client.assign_ip(ip, str(self.docker_id), None)
-            except (ValueError, RuntimeError, AlreadyAssignedError):
-                logger.exception("Cannot assign IPAddress %s", ip)
-                sys.exit(1)
 
+            try:
+                # Try to assign the address using the _assign helper function.
+                _assign(ip)
+            except AlreadyAssignedError:
+                # If the Docker IP is already assigned, it is most likely that
+                # an endpoint has been removed under our feet.  When using
+                # Docker IPAM, treat Docker as the source of
+                # truth for IP addresses.
+                logger.warning("Docker IP is already assigned, finding "
+                               "stale endpoint")
+                self._datastore_client.release_ips(set([ip]))
+
+                # Clean up whatever existing endpoint has this IP address.
+                # We can improve this later by making use of IPAM attributes
+                # in libcalico to store the endpoint ID.  For now,
+                # just loop through endpoints on this host.
+                endpoints = self._datastore_client.get_endpoints(
+                    hostname=HOSTNAME,
+                    orchestrator_id=ORCHESTRATOR_ID)
+                for ep in endpoints:
+                    if IPNetwork(ip) in ep.ipv4_nets:
+                        logger.warning("Deleting stale endpoint %s",
+                                       ep.endpoint_id)
+                        for profile_id in ep.profile_ids:
+                            self._datastore_client.remove_profile(profile_id)
+                        self._datastore_client.remove_endpoint(ep)
+                        break
+
+                # Assign the IP address to the new endpoint.  It shouldn't
+                # be assigned, since we just unassigned it.
+                logger.warning("Retry Docker assigned IP")
+                _assign(ip)
         return ip
 
     def _container_remove(self):
