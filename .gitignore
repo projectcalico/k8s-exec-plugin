@@ -60,5 +60,5 @@ target/
 # Emacs temp
 *~
 
-# Pycharm stuff
-.idea/
+# Build markers
+*.created
