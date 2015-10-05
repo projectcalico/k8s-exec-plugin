@@ -38,12 +38,12 @@ ut-circle: binary
 	# Can't use --rm on circle
 	# Circle also requires extra options for reporting.
 	docker run \
-	-v `pwd`/calico_kubernetes:/code/calico_kubernetes \
+	-v `pwd`:/code \
 	-v $(CIRCLE_TEST_REPORTS):/circle_output \
 	-e COVERALLS_REPO_TOKEN=$(COVERALLS_REPO_TOKEN) \
 	calico/kubernetes-build bash -c \
 	'>/dev/null 2>&1 & \
-	nosetests calico_kubernetes/tests -c nose.cfg \
+	cd calico_kubernetes; nosetests tests -c nose.cfg \
 	--with-xunit --xunit-file=/circle_output/output.xml; RC=$$?;\
 	[[ ! -z "$$COVERALLS_REPO_TOKEN" ]] && coveralls || true; exit $$RC'
 
