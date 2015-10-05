@@ -8,18 +8,19 @@ ROOT_LOG_FORMAT = '%(asctime)s %(process)d %(levelname)s %(message)s'
 LOG_FORMAT = '%(asctime)s %(process)d %(levelname)s %(filename)s: %(message)s'
 
 
-def configure_logger(logger, logging_level, root_logger=False, log_dir=LOG_DIR):
+def configure_logger(logger, log_level, root_logger=False, log_dir=LOG_DIR):
     """
     Configures logging to the file 'calico.log' in the specified log directory
 
     If the logs are not coming from calico_kubernetes.py, format the log to
      include the filename of origin
 
-    Additionally configures a stdout handler which logs INFO and above to stdout.
+    Additionally configures a stdout handler which logs INFO and
+    above to stdout.
 
     :param logger: logger object to configure
-    :param logging_level: level at which logger starts logging. Input type is lowercase string
-    :param root_logger: True indicated logger is calico_kubernetes. False indicates otherwise
+    :param log_level: level at which logger starts logging.
+    :param root_logger: True indicates logger is calico_kubernetes.
     :param log_dir: Directory where calico.log lives. If None set to default
     :return:
     """
@@ -32,15 +33,14 @@ def configure_logger(logger, logging_level, root_logger=False, log_dir=LOG_DIR):
 
     # Determine which formatter to use.
     if root_logger:
-        #formatter = logging.Formatter(ROOT_LOG_FORMAT)
-        formatter = logging.Formatter(LOG_FORMAT)
+        formatter = logging.Formatter(ROOT_LOG_FORMAT)
     else:
         formatter = logging.Formatter(LOG_FORMAT)
 
-    # Set formatter on handlers
+    # Set formatters on handlers
     file_hdlr.setFormatter(formatter)
     stdout_hdlr.setFormatter(formatter)
 
     logger.addHandler(file_hdlr)
     logger.addHandler(stdout_hdlr)
-    logger.setLevel(logging_level)
+    logger.setLevel(log_level)
