@@ -28,7 +28,7 @@ binary: kubernetesbuild.created
 
 ut: kubernetesbuild.created
 	docker run --rm -v `pwd`/calico_kubernetes:/code/calico_kubernetes \
-	-v `pwd`/nose.cfg:/code/nose.cfg \
+	-v `pwd`/calico_kubernetes/nose.cfg:/code/nose.cfg \
 	calico/kubernetes-build bash -c \
 	'>/dev/null 2>&1 & PYTHONPATH=/code/calico_kubernetes \
 	nosetests calico_kubernetes/tests -c nose.cfg'
