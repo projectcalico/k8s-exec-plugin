@@ -189,6 +189,10 @@ class NetworkPlugin(object):
         self._delete_docker_interface()
         logger.info('Configuring Calico network interface')
         ep = self._container_add(container_pid, interface)
+
+        # Log our container's interfaces after adding the new interface.
+        _log_interfaces(container_pid)
+
         interface_name = generate_cali_interface_name(IF_PREFIX, ep.endpoint_id)
         node_ip = self._get_node_ip()
         logger.info('Adding IP %s to interface %s', node_ip, interface_name)
@@ -396,9 +400,15 @@ class NetworkPlugin(object):
             logger.debug(check_output(['ln', '-s', '/proc/' + pid + '/ns/net',
                                       netns_file]))
 
+        # Log our container's interfaces before making any changes.
+        _log_interfaces(pid)
+
         # Reach into the netns and delete the docker-allocated interface.
         logger.debug(check_output(['ip', 'netns', 'exec', pid,
                                   'ip', 'link', 'del', 'eth0']))
+
+        # Log our container's interfaces after making our changes.
+        _log_interfaces(pid)
 
         # Clean up after ourselves (don't want to leak netns files)
         logger.debug(check_output(['rm', netns_file]))
@@ -709,6 +719,24 @@ class NetworkPlugin(object):
         tag = self._escape_chars(tag)
         return tag
 
+def _log_interfaces(namespace):
+    """
+    Log interface state in namespace and default namespace.
+
+    :param namespace
+    :type namespace str
+    """
+    if logger.isEnabledFor(logging.DEBUG):
+        interfaces = check_output(['ip', 'addr'])
+        logger.debug("Interfaces in default namespace:\n%s", interfaces)
+
+        namespaces = check_output(['ip', 'netns', 'list'])
+        logger.debug("Namespaces:\n%s", namespaces)
+
+        namespace_interfaces = check_output(['ip', 'netns', 'exec', namespace,
+                                             'ip', 'addr'])
+        logger.debug("Interfaces in namespace %s:\n%s",
+                     namespace, namespace_interfaces)
 
 def main():
     """
