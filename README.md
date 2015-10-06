@@ -1,4 +1,6 @@
-[![Circle CI](https://circleci.com/gh/projectcalico/calico-kubernetes/tree/master.svg?style=svg)](https://circleci.com/gh/projectcalico/calico-kubernetes/tree/master) [![Slack Status](https://calicousers-slackin.herokuapp.com/badge.svg)](https://calicousers-slackin.herokuapp.com)
+[![Circle CI](https://circleci.com/gh/projectcalico/calico-kubernetes/tree/master.svg?style=svg)](https://circleci.com/gh/projectcalico/calico-kubernetes/tree/master)
+[![Coverage Status](https://coveralls.io/repos/projectcalico/calico-kubernetes/badge.svg?branch=master&service=github)](https://coveralls.io/github/projectcalico/calico-kubernetes?branch=master)
+[![Slack Status](https://calicousers-slackin.herokuapp.com/badge.svg)](https://calicousers-slackin.herokuapp.com)
 # Calico Networking for Kubernetes
 Calico can be integrated into Kubernetes using the native Kubernetes network plugin API.  Calico is particularly suitable for large Kubernetes deployments on bare metal or private clouds, where the performance and complexity costs of overlay networks can become significant. It can also be used in public clouds.
 
