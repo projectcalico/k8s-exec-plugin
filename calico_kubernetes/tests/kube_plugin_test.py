@@ -18,11 +18,14 @@ from mock import patch, Mock, call
 from netaddr import IPAddress, IPNetwork
 from subprocess import CalledProcessError
 from docker.errors import APIError
+from nose.tools import assert_equal
 from calico_kubernetes import calico_kubernetes
 from pycalico.datastore import IF_PREFIX
 from pycalico.datastore_datatypes import Profile, Endpoint
 
 # noinspection PyUnresolvedReferences
+from calico_kubernetes.calico_kubernetes import _log_interfaces
+
 patch_object = patch.object
 
 
@@ -121,7 +124,10 @@ class NetworkPluginTest(unittest.TestCase):
                 patch_object(self.plugin, '_get_node_ip',
                              autospec=True) as m_get_node_ip, \
                 patch_object(calico_kubernetes, 'check_call',
-                             autospec=True) as m_check_call:
+                             autospec=True) as m_check_call, \
+                patch('calico_kubernetes.tests.kube_plugin_test.'
+                      'calico_kubernetes._log_interfaces',
+                      autospec=True) as _:
             # Set up mock objects
             m_get_container_pid.return_value = 'container_pid'
             m_read_docker_ip.return_value = IPAddress('1.1.1.1')
@@ -150,7 +156,6 @@ class NetworkPluginTest(unittest.TestCase):
                 ['ip', 'addr', 'add', '1.2.3.4' + '/32',
                  'dev', 'interface_name'])
             self.assertEqual(return_val, endpoint)
-
 
     def test_container_add(self):
         with patch_object(self.plugin, '_datastore_client',
@@ -685,3 +690,17 @@ class NetworkPluginTest(unittest.TestCase):
 
             # Call method under test expecting sys exit
             self.assertRaises(SystemExit, self.plugin._apply_tags, pod)
+
+    @patch('calico_kubernetes.tests.kube_plugin_test.'
+           'calico_kubernetes.check_output',
+           autospec=True, return_value='MOCK_OUTPUT')
+    def test_log_interfaces(self, m_check_output):
+        _log_interfaces('testNAMESPACE')
+
+        assert_equal(m_check_output.mock_calls,
+                     [
+                         call(['ip', 'addr']),
+                         call(['ip', 'netns', 'list']),
+                         call(['ip', 'netns', 'exec', 'testNAMESPACE',
+                               'ip', 'addr'])
+                     ])
