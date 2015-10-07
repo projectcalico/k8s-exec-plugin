@@ -56,6 +56,7 @@ class NetworkPlugin(object):
         self.profile_name = None
         self.namespace = None
         self.docker_id = None
+        self.auth_token = os.environ.get('KUBE_AUTH_TOKEN', None)
 
         self._datastore_client = IPAMClient()
         self.calicoctl = sh.Command(CALICOCTL_PATH).bake(_env=os.environ)
@@ -512,41 +513,16 @@ class NetworkPlugin(object):
         """
         logger.info('Getting API Resource: %s from KUBE_API_ROOT: %s',
                     path, KUBE_API_ROOT)
-        bearer_token = self._get_api_token()
         session = requests.Session()
-        session.headers.update({'Authorization': 'Bearer ' + bearer_token})
+        if self.auth_token:
+            session.headers.update({'Authorization':
+                                    'Bearer ' + self.auth_token})
         response = session.get(KUBE_API_ROOT + path, verify=False)
         response_body = response.text
 
         # The response body contains some metadata, and the pods themselves
         # under the 'items' key.
         return json.loads(response_body)['items']
-
-    def _get_api_token(self):
-        """
-        Get the kubelet Bearer token for this node, used for HTTPS auth.
-        If no token exists, this method will return an empty string.
-        :return: The token.
-        :rtype: str
-        """
-        logger.info('Getting Kubernetes Authorization')
-
-        try:
-            with open('/var/lib/kubelet/kubernetes_auth') as f:
-                json_string = f.read()
-        except IOError as e:
-            logger.warning("Failed to open auth_file (%s). Assuming "
-                           "insecure mode", e)
-            if self._api_root_secure():
-                logger.error("Cannot use insecure mode. API root is set to"
-                             "secure (%s). Exiting", KUBE_API_ROOT)
-                sys.exit(1)
-            else:
-                return ""
-
-        logger.info('Got kubernetes_auth: %s', json_string)
-        auth_data = json.loads(json_string)
-        return auth_data['BearerToken']
 
     def _api_root_secure(self):
         """
