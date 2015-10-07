@@ -19,14 +19,16 @@ from netaddr import IPAddress, IPNetwork
 from subprocess import CalledProcessError
 from docker.errors import APIError
 from nose.tools import assert_equal
+from nose_parameterized import param
 from calico_kubernetes import calico_kubernetes
 from pycalico.datastore import IF_PREFIX
 from pycalico.datastore_datatypes import Profile, Endpoint
 from pycalico.block import AlreadyAssignedError
+from nose.tools import assert_true
 
-# noinspection PyUnresolvedReferences
 from calico_kubernetes.calico_kubernetes import _log_interfaces
 
+# noinspection PyUnresolvedReferences
 patch_object = patch.object
 
 
@@ -683,3 +685,32 @@ class NetworkPluginTest(unittest.TestCase):
                          call(['ip', 'netns', 'exec', 'testNAMESPACE',
                                'ip', 'addr'])
                      ])
+
+    @patch('sys.exit', autospec=True)
+    @patch('calico_kubernetes.calico_kubernetes.run')
+    @patch('calico_kubernetes.tests.kube_plugin_test.'
+           'calico_kubernetes.configure_logger', autospec=True)
+    def test_run_protected(self, m_conf_logger, m_run, m_sys_exit):
+        calico_kubernetes.run_protected()
+
+        # Check that the logger was set up; don't care about the details.
+        assert_true(len(m_conf_logger.mock_calls) > 0)
+        # Check we actually called the work function.
+        m_run.assert_called_with()
+        # We should exit without error.
+        m_sys_exit.assert_called_with(0)
+
+    @patch('sys.exit', autospec=True)
+    @patch('calico_kubernetes.calico_kubernetes.run')
+    @patch('calico_kubernetes.tests.kube_plugin_test.'
+           'calico_kubernetes.configure_logger', autospec=True)
+    def test_run_protected_sys_exit(self, _, m_run, m_sys_exit):
+        for exception_cls in (SystemExit, RuntimeError):
+            m_run.side_effect = exception_cls
+
+            calico_kubernetes.run_protected()
+
+            # Check we actually called the work function.
+            m_run.assert_called_with()
+            # We should exit with an error.
+            m_sys_exit.assert_called_with(1)

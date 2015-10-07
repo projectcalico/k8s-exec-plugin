@@ -779,10 +779,34 @@ def _log_interfaces(namespace):
         logger.debug("Interfaces in namespace %s:\n%s",
                      namespace, namespace_interfaces)
 
-def main():
+def run_protected():
     """
-    Runs the plugin.
+    Runs the plugin, intercepting all exceptions.
     """
+    # Configure logging
+    configure_logger(logger, LOG_LEVEL, True)
+    configure_logger(pycalico_logger, LOG_LEVEL, False)
+
+    # Try to run the plugin, logging out any BaseExceptions raised.
+    logger.info("Begin Calico network plugin execution")
+    rc = 0
+    try:
+        run()
+    except SystemExit:
+        # If a SystemExit is thrown, we've already handled the error and have
+        # called sys.exit().  No need to produce a duplicate exception
+        # message, just set the return code to 1.
+        rc = 1
+    except BaseException:
+        # Log the exception and set the return code to 1.
+        logger.exception("Unhandled Exception killed plugin")
+        rc = 1
+    finally:
+        # Log that we've finished, and exit with the correct return code.
+        logger.info("Calico network plugin execution complete")
+        sys.exit(rc)
+
+def run():
     logger.info('Plugin Args: %s', sys.argv)
     mode = sys.argv[1]
 
@@ -817,25 +841,4 @@ def main():
 
 
 if __name__ == '__main__':
-    # Configure logging
-    configure_logger(logger, LOG_LEVEL, True)
-    configure_logger(pycalico_logger, LOG_LEVEL, False)
-
-    # Try to run the plugin, logging out any BaseExceptions raised.
-    logger.info("Begin Calico network plugin execution")
-    rc = 0
-    try:
-        main()
-    except SystemExit:
-        # If a SystemExit is thrown, we've already handled the error and have
-        # called sys.exit().  No need to produce a duplicate exception
-        # message, just set the return code to 1.
-        rc = 1
-    except BaseException:
-        # Log the exception and set the return code to 1.
-        logger.exception("Unhandled Exception killed plugin")
-        rc = 1
-    finally:
-        # Log that we've finished, and exit with the correct return code.
-        logger.info("Calico network plugin execution complete")
-        sys.exit(rc)
+    run_protected()
