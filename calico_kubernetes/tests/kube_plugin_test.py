@@ -547,33 +547,33 @@ class NetworkPluginTest(unittest.TestCase):
             with self.assertRaises(KeyError):
                 self.plugin._get_pod_config()
 
-    def test_get_api_path(self):
-        with patch('calico_kubernetes.calico_kubernetes.requests.Session',
-                   autospec=True) as m_session, \
-                patch('json.loads', autospec=True) as m_json_load:
-            # Set up mock objects
-            self.plugin.auth_token = 'TOKEN'
-            m_session_return = Mock()
-            m_session_return.headers = Mock()
-            m_get_return = Mock()
-            m_get_return.text = 'response_body'
-            m_session_return.get.return_value = m_get_return
-            m_session.return_value = m_session_return
+    @patch('calico_kubernetes.calico_kubernetes.requests.Session',
+           autospec=True)
+    @patch('json.loads', autospec=True)
+    def test_get_api_path(self, m_json_load, m_session):
+        # Set up mock objects
+        self.plugin.auth_token = 'TOKEN'
+        m_session_return = Mock()
+        m_session_return.headers = Mock()
+        m_get_return = Mock()
+        m_get_return.text = 'response_body'
+        m_session_return.get.return_value = m_get_return
+        m_session.return_value = m_session_return
 
-            # Initialize args
-            path = 'path/to/api/object'
+        # Initialize args
+        path = 'path/to/api/object'
 
-            # Call method under test
-            self.plugin._get_api_path(path)
+        # Call method under test
+        self.plugin._get_api_path(path)
 
-            # Assert
-            m_session.assert_called_once_with()
-            m_session_return.headers.update.assert_called_once_with(
-                {'Authorization': 'Bearer ' + 'TOKEN'})
-            m_session_return.get.assert_called_once_with(
-                calico_kubernetes.KUBE_API_ROOT + 'path/to/api/object',
-                verify=False)
-            m_json_load.assert_called_once_with('response_body')
+        # Assert
+        m_session.assert_called_once_with()
+        m_session_return.headers.update.assert_called_once_with(
+            {'Authorization': 'Bearer ' + 'TOKEN'})
+        m_session_return.get.assert_called_once_with(
+            calico_kubernetes.KUBE_API_ROOT + 'path/to/api/object',
+            verify=False)
+        m_json_load.assert_called_once_with('response_body')
 
     def test_generate_rules(self):
         pod = {'metadata': {'profile': 'name'}}
