@@ -19,6 +19,7 @@ from netaddr import IPAddress, IPNetwork
 from subprocess import CalledProcessError
 from docker.errors import APIError
 from nose.tools import assert_equal
+from nose_parameterized import parameterized
 from calico_kubernetes import calico_kubernetes
 from pycalico.datastore import IF_PREFIX
 from pycalico.datastore_datatypes import Profile, Endpoint
@@ -671,19 +672,22 @@ class NetworkPluginTest(unittest.TestCase):
             # Call method under test expecting sys exit
             self.assertRaises(SystemExit, self.plugin._apply_tags, pod)
 
-    @patch('calico_kubernetes.tests.kube_plugin_test.'
-           'calico_kubernetes.check_output',
-           autospec=True, return_value='MOCK_OUTPUT')
-    def test_log_interfaces(self, m_check_output):
-        _log_interfaces('testNAMESPACE')
+    @parameterized.expand([(1234,), ('testNAMESPACE',)])
+    def test_log_interfaces(self, ns):
+        with patch('calico_kubernetes.tests.kube_plugin_test.'
+                   'calico_kubernetes.check_output',
+                   autospec=True, return_value='MOCK_OUTPUT') as m_check_output:
+            _log.info('Testing namespace %s (type=%s)', ns, type(ns))
+            _log_interfaces(ns)
 
-        assert_equal(m_check_output.mock_calls,
-                     [
-                         call(['ip', 'addr']),
-                         call(['ip', 'netns', 'list']),
-                         call(['ip', 'netns', 'exec', 'testNAMESPACE',
-                               'ip', 'addr'])
-                     ])
+            assert_equal(m_check_output.mock_calls,
+                         [
+                             call(['ip', 'addr']),
+                             call(['ip', 'netns', 'list']),
+                             # Check we always pass a string to check_output
+                             call(['ip', 'netns', 'exec', str(ns),
+                                   'ip', 'addr'])
+                         ])
 
     @patch('sys.exit', autospec=True)
     @patch('calico_kubernetes.calico_kubernetes.run')
