@@ -33,7 +33,7 @@ ETCD_AUTHORITY_ENV = "ETCD_AUTHORITY"
 if ETCD_AUTHORITY_ENV not in os.environ:
     os.environ[ETCD_AUTHORITY_ENV] = 'kubernetes-master:6666'
 
-# Get the desired calicoctl location.  By default, we search the PATH for 
+# Get the desired calicoctl location.  By default, we search the PATH for
 # the location of calicoctl, unless overridden by this variable.
 CALICOCTL_PATH = os.environ.get('CALICOCTL_PATH', 'calicoctl')
 
@@ -125,7 +125,7 @@ class NetworkPlugin(object):
 
         # Retrieve IPAddress from the attached IPNetworks on the endpoint
         # Since Kubernetes only supports ipv4, we'll only check for ipv4 nets
-        if not endpoint.ipv4_nets :
+        if not endpoint.ipv4_nets:
             logger.error("Exiting. No IPs attached to endpoint %s",
                          self.docker_id)
             sys.exit(1)
@@ -435,7 +435,7 @@ class NetworkPlugin(object):
             # If both get_host_ips return empty lists, print message and exit.
             logger.exception('No Valid IP Address Found for Host - cannot '
                              'configure networking for pod %s. '
-                             'Exiting' % (self.pod_name))
+                             'Exiting', self.pod_name)
             sys.exit(1)
 
     def _delete_docker_interface(self):
@@ -576,7 +576,7 @@ class NetworkPlugin(object):
         ns_tag = self._get_namespace_tag(pod)
 
         # kube-system services need to be accessed by all namespaces
-        if self.namespace == "kube-system" :
+        if self.namespace == "kube-system":
             logger.info("Pod %s belongs to the kube-system namespace - "
                         "allow all inbound and outbound traffic", pod)
             return [["allow"]], [["allow"]]
