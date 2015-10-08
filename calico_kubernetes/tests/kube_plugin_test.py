@@ -11,30 +11,30 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import logging
 
-import json
 import unittest
 from mock import patch, Mock, call
 from netaddr import IPAddress, IPNetwork
 from subprocess import CalledProcessError
 from docker.errors import APIError
 from nose.tools import assert_equal
-from nose_parameterized import param
 from calico_kubernetes import calico_kubernetes
 from pycalico.datastore import IF_PREFIX
 from pycalico.datastore_datatypes import Profile, Endpoint
 from pycalico.block import AlreadyAssignedError
 from nose.tools import assert_true
 
+# noinspection PyProtectedMember
 from calico_kubernetes.calico_kubernetes import _log_interfaces
 
 # noinspection PyUnresolvedReferences
 patch_object = patch.object
 
-
 TEST_HOST = calico_kubernetes.HOSTNAME
 TEST_ORCH_ID = calico_kubernetes.ORCHESTRATOR_ID
 
+_log = logging.getLogger(__name__)
 
 
 class NetworkPluginTest(unittest.TestCase):
@@ -483,7 +483,6 @@ class NetworkPluginTest(unittest.TestCase):
             m_datastore_client.profile_exists.assert_called_once_with(profile_name)
             self.assertFalse(m_datastore_client.create_profile.called)
 
-
     def test_get_pod_ports(self):
         # Initialize pod dictionary and expected outcome
         pod = {'spec': {'containers': [{'ports': [1, 2, 3]},{'ports': [4, 5]}]}}
@@ -706,8 +705,9 @@ class NetworkPluginTest(unittest.TestCase):
            'calico_kubernetes.configure_logger', autospec=True)
     def test_run_protected_sys_exit(self, _, m_run, m_sys_exit):
         for exception_cls in (SystemExit, RuntimeError):
+            _log.info('Testing that we handle %s exceptions',
+                      str(exception_cls.__name__))
             m_run.side_effect = exception_cls
-
             calico_kubernetes.run_protected()
 
             # Check we actually called the work function.
