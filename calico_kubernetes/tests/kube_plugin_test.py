@@ -19,7 +19,7 @@ import unittest
 
 from mock import patch, Mock, MagicMock, call
 from nose_parameterized import param
-from nose.tools import assert_equal,  assert_true
+from nose.tools import assert_equal, assert_true, assert_false
 from docker.errors import APIError
 from netaddr import IPAddress, IPNetwork
 from subprocess import CalledProcessError
@@ -57,6 +57,7 @@ class NetworkPluginTest(unittest.TestCase):
             self.plugin._datastore_client = self.m_datastore_client
 
     def test_create(self):
+        """Test Pod Creation Hook"""
         with patch_object(self.plugin, '_configure_interface',
                           autospec=True) as m_configure_interface, \
                 patch_object(self.plugin, '_configure_profile',
@@ -74,14 +75,15 @@ class NetworkPluginTest(unittest.TestCase):
             self.plugin.create(namespace, pod_name, docker_id)
 
             # Assert
-            self.assertEqual(namespace, self.plugin.namespace)
-            self.assertEqual(pod_name, self.plugin.pod_name)
-            self.assertEqual(docker_id, self.plugin.docker_id)
-            self.assertEqual(profile_name, self.plugin.profile_name)
+            assert_equal(namespace, self.plugin.namespace)
+            assert_equal(pod_name, self.plugin.pod_name)
+            assert_equal(docker_id, self.plugin.docker_id)
+            assert_equal(profile_name, self.plugin.profile_name)
             m_configure_interface.assert_called_once_with()
             m_configure_profile.assert_called_once_with('endpt_id')
 
     def test_create_error(self):
+        """Test Pod Creation Hook Failure"""
         with patch_object(self.plugin, '_configure_interface',
                           autospec=True) as m_configure_interface, \
                 patch('sys.exit', autospec=True) as m_sys_exit:
@@ -100,6 +102,7 @@ class NetworkPluginTest(unittest.TestCase):
             m_sys_exit.assert_called_once_with(1)
 
     def test_delete(self):
+        """Test Pod Deletion Hook"""
         with patch_object(self.plugin, '_container_remove', autospec=True) as m_container_remove:
             # Set up mock objs
             workload_id = 19
@@ -116,13 +119,18 @@ class NetworkPluginTest(unittest.TestCase):
 
             # Assert
             m_container_remove.assert_called_once_with()
-            self.assertEqual(namespace, self.plugin.namespace)
-            self.assertEqual(pod_name, self.plugin.pod_name)
-            self.assertEqual(docker_id, self.plugin.docker_id)
-            self.assertEqual(profile_name, self.plugin.profile_name)
+            assert_equal(namespace, self.plugin.namespace)
+            assert_equal(pod_name, self.plugin.pod_name)
+            assert_equal(docker_id, self.plugin.docker_id)
+            assert_equal(profile_name, self.plugin.profile_name)
             self.m_datastore_client.remove_profile(profile_name)
 
     def test_delete_error(self):
+        """Test Pod Deletion Hook Failure"""
+        """
+        If the datastore remove_profile function returns KeyError, the profile is not in the datastore.
+        Issue warning log, but do not fail.
+        """
         with patch_object(self.plugin, '_docker_client', autospec=True) as m_docker_client, \
                 patch_object(self.plugin, '_container_remove', autospec=True) as m_container_remove:
             # Set up mock objs
@@ -140,6 +148,7 @@ class NetworkPluginTest(unittest.TestCase):
             self.plugin.delete(namespace, pod_name, docker_id)
 
     def test_status(self):
+        """Test Pod Status Hook"""
         with patch('__builtin__.print', autospec=True) as m_print:
             # Set up args
             namespace = 'ns'
@@ -171,6 +180,10 @@ class NetworkPluginTest(unittest.TestCase):
             m_print.assert_called_once_with(json.dumps(json_dict))
 
     def test_status_no_ip(self):
+        """Test Pod Status Hook: No IP on Endpoint"""
+        """
+        Test for sys exit when endpoint ipv4_nets is empty.
+        """
         with patch('__builtin__.print', autospec=True) as m_print:
             # Set up args
             namespace = 'ns'
@@ -187,12 +200,13 @@ class NetworkPluginTest(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 self.plugin.status(namespace, pod_name, docker_id)
 
-            self.m_datastore_client.get_endpoint.assert_called_once_with(hostname=TEST_HOST,
-                                                                         orchestrator_id=TEST_ORCH_ID,
-                                                                         workload_id=docker_id)
-            self.assertFalse(m_print.called)
+            assert_false(m_print.called)
 
     def test_status_ep_error(self):
+        """Test Pod Status Hook: Endpoint Retrieval Error"""
+        """
+        Test for sys exit when get_endpoint returns an error.
+        """
         with patch('__builtin__.print', autospec=True) as m_print:
             # Set up args
             namespace = 'ns'
@@ -204,10 +218,7 @@ class NetworkPluginTest(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 self.plugin.status(namespace, pod_name, docker_id)
 
-            self.m_datastore_client.get_endpoint.assert_called_once_with(hostname=TEST_HOST,
-                                                                         orchestrator_id=TEST_ORCH_ID,
-                                                                         workload_id=docker_id)
-            self.assertFalse(m_print.called)
+            assert_false(m_print.called)
 
     def test_configure_interface(self):
         with patch_object(self.plugin, '_read_docker_ip',
@@ -253,7 +264,7 @@ class NetworkPluginTest(unittest.TestCase):
             m_check_call.assert_called_once_with(
                 ['ip', 'addr', 'add', '1.2.3.4' + '/32',
                  'dev', 'interface_name'])
-            self.assertEqual(return_val, endpoint)
+            assert_equal(return_val, endpoint)
 
     def test_container_add(self):
         with patch_object(self.plugin, '_validate_container_state',
@@ -293,13 +304,15 @@ class NetworkPluginTest(unittest.TestCase):
                                                                        [ip])
             self.m_datastore_client.set_endpoint.assert_called_once_with(endpoint)
             endpoint.provision_veth.assert_called_once_with(m_pid_ns(pid), interface)
-            self.assertEqual(endpoint.mac, 'new_mac')
-            self.assertEqual(test_return, endpoint)
+            assert_equal(endpoint.mac, 'new_mac')
+            assert_equal(test_return, endpoint)
 
     def test_container_add_create_error(self):
-        with patch_object(self.plugin, '_validate_container_state',
-                             autospec=True) as m_validate_container_state, \
-                patch('calico_kubernetes.calico_kubernetes.netns.PidNamespace', autospec=True) as m_pid_ns, \
+        """Test Endpoint Creation Error in _container_add"""
+        """
+        _container_add should release ips and exit when endpoint creation fails.
+        """
+        with patch_object(self.plugin, '_validate_container_state', autospec=True) as m_validate, \
                 patch_object(self.plugin, '_assign_container_ip', autospec=True) as m_assign_ip:
 
             # Set up mock objs
@@ -307,31 +320,17 @@ class NetworkPluginTest(unittest.TestCase):
             self.m_datastore_client.create_endpoint.side_effect = KeyError
 
             # Set up arguments
-            container_name = 'container_name'
-            self.plugin.docker_id = container_name
             pid = 'pid'
             ip = IPAddress('1.1.1.1')
             interface = 'eth0'
-            hostname = TEST_HOST
-            orchestrator_id = TEST_ORCH_ID
             m_assign_ip.return_value = ip
 
             with self.assertRaises(SystemExit):
                 self.plugin._container_add(pid, interface)
 
             # Assert
-            self.m_datastore_client.get_endpoint.assert_called_once_with(
-                hostname=hostname,
-                orchestrator_id=orchestrator_id,
-                workload_id=self.plugin.docker_id
-            )
-            m_validate_container_state.assert_called_once_with(container_name)
-            self.m_datastore_client.create_endpoint.assert_called_once_with(TEST_HOST,
-                                                                       TEST_ORCH_ID,
-                                                                       self.plugin.docker_id,
-                                                                       [ip])
             self.m_datastore_client.release_ips.assert_called_once_with(set([ip]))
-            self.assertFalse(self.m_datastore_client.set_endpoint.called)
+            assert_false(self.m_datastore_client.set_endpoint.called)
 
 
     def test_container_add_container_exists(self):
@@ -376,35 +375,16 @@ class NetworkPluginTest(unittest.TestCase):
             m_remove_veth.assert_called_once_with(endpoint.name)
 
     def test_container_remove_with_exceptions(self):
+        """Test Container Remove Exception Handling"""
+        """
+        Failures in remove_veth and remove_workload should gently raise exceptions without exit.
+        """
         with patch('calico_kubernetes.calico_kubernetes.netns.remove_veth', autospec=True) as m_remove_veth:
-            # Set up mock objs
-            endpoint = Endpoint(TEST_HOST, TEST_ORCH_ID, '1234', '5678',
-                                'active', 'mac')
-            ipv4 = IPAddress('1.1.1.1')
-            ipv6 = IPAddress('201:db8::')
-            endpoint.ipv4_nets.add(IPNetwork(ipv4))
-            endpoint.ipv6_nets.add(IPNetwork(ipv6))
-            self.m_datastore_client.get_endpoint.return_value = endpoint
-
-            # Set up arguments
-            self.plugin.docker_id = "abcd"
-            hostname = TEST_HOST
-            orchestrator_id = TEST_ORCH_ID
+            # Raise errors under test.
             m_remove_veth.side_effect = CalledProcessError(1, '', '')
             self.m_datastore_client.remove_workload.side_effect = KeyError
 
-            # Call method under test
             self.plugin._container_remove()
-
-            # Assert
-            self.m_datastore_client.get_endpoint.assert_called_once_with(
-                hostname=hostname,
-                orchestrator_id=orchestrator_id,
-                workload_id='abcd'
-            )
-
-            m_remove_veth.assert_called_once_with(endpoint.name)
-
 
     def test_container_remove_no_endpoints(self):
         """
@@ -428,7 +408,7 @@ class NetworkPluginTest(unittest.TestCase):
 
             # Assert
             m_get_container_info.assert_called_once_with('container_name')
-            self.assertTrue(info_dict['State']['Running'])
+            assert_true(info_dict['State']['Running'])
             self.assertNotEqual(info_dict['HostConfig']['NetworkMode'], 'host')
 
     def test_validate_container_state_not_running(self):
@@ -484,6 +464,10 @@ class NetworkPluginTest(unittest.TestCase):
             self.assertRaises(SystemExit, self.plugin._get_container_info, container_name)
 
     def test_get_container_info_404(self):
+        """Test 404 error on API Access in _get_container_info"""
+        """
+        Method should raise SystemExit when API returns 404
+        """
         with patch_object(self.plugin, '_docker_client', autospec=True) as m_docker_client:
             # Create mock side effect APIError
             response = Mock()
@@ -508,6 +492,10 @@ class NetworkPluginTest(unittest.TestCase):
             m_get_container_info.assert_called_once_with(container_name)
 
     def test_assign_container_ip_docker_already_assigned(self):
+        """Test Duplicate IP assignment"""
+        """
+        When IP is already assigned, assert that all endpoints, ips and profiles are removed.
+        """
         with patch.object(self.plugin, "_read_docker_ip") as m_read_ip:
 
             # Don't use CALICO_IPAM for this test.
@@ -528,16 +516,21 @@ class NetworkPluginTest(unittest.TestCase):
 
             # Run method under test
             ip = self.plugin._assign_container_ip()
+
             self.m_datastore_client.get_endpoints.assert_called_once()
             self.m_datastore_client.remove_profile.has_calls([("p1"), ("p2")])
             self.m_datastore_client.release_ips.assert_called_once_with(set([docker_ip]))
             self.m_datastore_client.remove_endpoint.assert_called_once_with(
                 endpoint)
 
-            # Assert we return the Docker IP
-            self.assertEqual(ip, docker_ip)
+            # Assert we return the IP we just deleted then readded.
+            assert_equal(ip, docker_ip)
 
     def test_assign_container_ip_assign_error(self):
+        """Test assign_container_ip sys exit on Runtime Error"""
+        """
+        Assert SystemExit when datastore client fails to allocate IP
+        """
         with patch.object(self.plugin, "_read_docker_ip") as m_read_ip:
 
             # Don't use CALICO_IPAM for this test.
@@ -552,26 +545,14 @@ class NetworkPluginTest(unittest.TestCase):
             self.m_datastore_client.assign_ip.side_effect = RuntimeError
 
             # Run method under test
-            with self.assertRaises(SystemExit):
-                self.plugin._assign_container_ip()
-
-    def test_assign_container_ipam_error(self):
-        # Don't use CALICO_IPAM for this test.
-        calico_kubernetes.CALICO_IPAM = "true"
-
-        # Mock the Docker IP
-        self.plugin.docker_id = "docker_id"
-        self.m_datastore_client.auto_assign_ips.side_effect = RuntimeError
-
-        # Run method under test
-        with self.assertRaises(SystemExit):
-            self.plugin._assign_container_ip()
-
-        self.m_datastore_client.auto_assign_ips.assert_called_once_with(
-            1, 0, "docker_id", None)
+            self.assertRaises(SystemExit, self.plugin._assign_container_ip)
 
     def test_assign_container_ipam_succeed(self):
-        # Don't use CALICO_IPAM for this test.
+        """Test assign_container_ip with IPAM enabled"""
+        """
+        When IPAM is enabled, client should return a list of ips. 
+        Method should scrape off and return the first ipv4.
+        """
         calico_kubernetes.CALICO_IPAM = "true"
 
         # Mock the Docker IP
@@ -582,7 +563,22 @@ class NetworkPluginTest(unittest.TestCase):
 
         self.m_datastore_client.auto_assign_ips.assert_called_once_with(
             1, 0, "docker_id", None)
-        self.assertEqual(ip, 1)
+        assert_equal(ip, 1)
+
+    def test_assign_container_ipam_error(self):
+        # Don't use CALICO_IPAM for this test.
+        """Test assign_container_ip IPAM auto assign failure"""
+        """
+        Assert SystemExit when datastore client fails to allocate IP
+        """
+        calico_kubernetes.CALICO_IPAM = "true"
+
+        # Mock the Docker IP
+        self.plugin.docker_id = "docker_id"
+        self.m_datastore_client.auto_assign_ips.side_effect = RuntimeError
+
+        # Run method under test
+        self.assertRaises(SystemExit, self.plugin._assign_container_ip)
 
 
     def test_get_node_ip_no_host_ips(self):
@@ -601,7 +597,7 @@ class NetworkPluginTest(unittest.TestCase):
 
             # Assert
             m_get_host_ips.assert_called_once_with(version=4)
-            self.assertEqual(return_val, '1.2.3.4')
+            assert_equal(return_val, '1.2.3.4')
 
     def test_get_node_ip(self):
         with patch('calico_kubernetes.calico_kubernetes.get_host_ips',
@@ -623,7 +619,7 @@ class NetworkPluginTest(unittest.TestCase):
 
             # Assert
             m_get_container_info.assert_called_once_with(self.plugin.docker_id)
-            self.assertEqual(return_val, IPAddress('1.2.3.4'))
+            assert_equal(return_val, IPAddress('1.2.3.4'))
 
     def test_delete_docker_interface(self):
         with patch_object(calico_kubernetes, 'check_output',
@@ -709,7 +705,7 @@ class NetworkPluginTest(unittest.TestCase):
             m_get_pod_config.assert_called_once_with()
             self.m_datastore_client.profile_exists.assert_called_once_with(
                 profile_name)
-            self.assertFalse(self.m_datastore_client.create_profile.called)
+            assert_false(self.m_datastore_client.create_profile.called)
 
     def test_get_pod_ports(self):
         # Initialize pod dictionary and expected outcome
@@ -720,7 +716,7 @@ class NetworkPluginTest(unittest.TestCase):
         return_val = self.plugin._get_pod_ports(pod)
 
         # Assert
-        self.assertEqual(return_val, ports)
+        assert_equal(return_val, ports)
 
     def test_get_pod_ports_no_ports(self):
         """
@@ -740,6 +736,10 @@ class NetworkPluginTest(unittest.TestCase):
         self.assertListEqual(return_val, ports)
 
     def test_get_pod_config(self):
+        """Test _get_pod_config"""
+        """
+        Given a list of pods and a queried pod name, ensure that the proper data is returned.
+        """
         with patch_object(self.plugin, '_get_api_path',
                           autospec=True) as m_get_api_path:
             # Set up mock object
@@ -757,9 +757,13 @@ class NetworkPluginTest(unittest.TestCase):
             return_val = self.plugin._get_pod_config()
 
             # Assert
-            self.assertEqual(return_val, pod2)
+            assert_equal(return_val, pod2)
 
     def test_get_pod_config_error(self):
+        """Test _get_pod_config Failure"""
+        """
+        Given a list of pods and an invalid pod name, ensure that a KeyError is raised.
+        """
         with patch_object(self.plugin, '_get_api_path',
                           autospec=True) as m_get_api_path:
             # Set up mock object and class members
@@ -769,15 +773,19 @@ class NetworkPluginTest(unittest.TestCase):
 
             # Set up class member
             self.plugin.pod_name = 'corrupt'
+            self.plugin.namespace = 'ns'
 
             # Call method under test expecting exception
-            with self.assertRaises(KeyError):
-                self.plugin._get_pod_config()
+            self.assertRaises(KeyError, self.plugin._get_pod_config)
 
     @patch('calico_kubernetes.calico_kubernetes.requests.Session',
            autospec=True)
     @patch('json.loads', autospec=True)
     def test_get_api_path(self, m_json_load, m_session):
+        """Test _get_api_path"""
+        """
+        Test for correct calls in _get_api_path.
+        """
         # Set up mock objects
         self.plugin.auth_token = 'TOKEN'
         m_session_return = Mock()
@@ -793,8 +801,7 @@ class NetworkPluginTest(unittest.TestCase):
         # Call method under test
         self.plugin._get_api_path(path)
 
-        # Assert
-        m_session.assert_called_once_with()
+        # Assert correct data in calls.
         m_session_return.headers.update.assert_called_once_with(
             {'Authorization': 'Bearer ' + 'TOKEN'})
         m_session_return.get.assert_called_once_with(
@@ -803,20 +810,32 @@ class NetworkPluginTest(unittest.TestCase):
         m_json_load.assert_called_once_with('response_body')
 
     def test_generate_rules(self):
+        """Test _generate_rules"""
+        """
+        Test that label conversion and command parsing works for multiple rules.
+        """
         pod = {
                 'metadata': {
-                                'name': 'name',
-                                'namespace': 'ns',
-                                'annotations': {
-                                    POLICY_ANNOTATION_KEY : "allow from label key=value"
-                                }
-                }
+                    'name': 'name',
+                    'namespace': 'ns',
+                    'annotations': {
+                        POLICY_ANNOTATION_KEY: "allow from label key=value; allow tcp from ports 555,666"
+                    }
+                  }
               }
         self.plugin.namespace = 'ns'
+
         # Call method under test empty annotations/namespace
         return_val = self.plugin._generate_rules(pod)
+        assert_equal(return_val, ([["allow", "from", "tag", "ns_key_value"], 
+                                   ["allow", "tcp", "from", "ports", "555,666"]], 
+                                  [["allow"]]))
 
     def test_generate_rules_kube_system(self):
+        """Test _generate_rules with namespace kube_system"""
+        """
+        Test that kube-system overrides rules to allow all
+        """
         pod = {
                 'metadata': {
                                 'name': 'name',
@@ -829,8 +848,14 @@ class NetworkPluginTest(unittest.TestCase):
         self.plugin.namespace = 'kube-system'
         # Call method under test empty annotations/namespace
         return_val = self.plugin._generate_rules(pod)
+        assert_equal(return_val, ([["allow",]], 
+                                  [["allow"]]))
 
     def test_generate_rules_ns_iso(self):
+        """Test _generate_rules with ns_isolation"""
+        """
+        Test that ns_isolation is default policy when set.
+        """
         pod = {
                 'metadata': {
                                 'name': 'name',
@@ -843,8 +868,33 @@ class NetworkPluginTest(unittest.TestCase):
         # Call method under test empty annotations/namespace
         return_val = self.plugin._generate_rules(pod)
 
-        # Assert
-        self.assertEqual(return_val, ([["allow", "from", "tag", "namespace_ns"]], [['allow']]))
+        # Assert return value is correct.
+        assert_equal(return_val, ([["allow", "from", "tag", "namespace_ns"]], 
+                                  [['allow']]))
+
+    def test_generate_rules_ns_iso_override(self):
+        """Test _generate_rules with ns_isolation and programmed policy"""
+        """
+        Test that ns_isolation is overridden by annotation policy
+        """
+        pod = {
+            'metadata': {
+                'name': 'name',
+                'namespace': 'ns',
+                'annotations': {
+                    POLICY_ANNOTATION_KEY: "allow from label key=value"
+                }
+            }
+        }
+        self.plugin.namespace = 'ns'
+        calico_kubernetes.DEFAULT_POLICY = 'ns_isolation'
+
+        # Call method under test empty annotations/namespace
+        return_val = self.plugin._generate_rules(pod)
+
+        # Assert return value is correct.
+        assert_equal(return_val, ([["allow", "from", "tag", "ns_key_value"]], 
+                                  [['allow']]))
 
     def test_apply_rules(self):
         with patch_object(self.plugin, '_generate_rules',
@@ -905,7 +955,7 @@ class NetworkPluginTest(unittest.TestCase):
             self.plugin.profile_name)
         self.m_datastore_client.profile_update_tags.assert_called_once_with(
             m_profile)
-        self.assertEqual(m_profile.tags, check_tags)
+        assert_equal(m_profile.tags, check_tags)
 
     def test_apply_tags_no_labels(self):
         # Intialize args
@@ -917,7 +967,7 @@ class NetworkPluginTest(unittest.TestCase):
         self.plugin._apply_tags(pod)
 
         # Assert
-        self.assertFalse(self.m_datastore_client.called)
+        assert_false(self.m_datastore_client.called)
 
     def test_apply_tags_profile_not_found(self):
         # Intialize args
@@ -952,6 +1002,10 @@ class NetworkPluginTest(unittest.TestCase):
     @patch('calico_kubernetes.tests.kube_plugin_test.'
            'calico_kubernetes.configure_logger', autospec=True)
     def test_run_protected(self, m_conf_logger, m_run, m_sys_exit):
+        """Test global method run_protected"""
+        """
+        Ensure code path not broken
+        """
         calico_kubernetes.run_protected()
 
         # Check that the logger was set up; don't care about the details.
@@ -966,6 +1020,7 @@ class NetworkPluginTest(unittest.TestCase):
     @patch('calico_kubernetes.tests.kube_plugin_test.'
            'calico_kubernetes.configure_logger', autospec=True)
     def test_run_protected_sys_exit(self, _, m_run, m_sys_exit):
+        """Test failure in global method run_protected"""
         for exception_cls in (SystemExit, RuntimeError):
             _log.info('Testing that we handle %s exceptions',
                       str(exception_cls.__name__))
@@ -978,23 +1033,39 @@ class NetworkPluginTest(unittest.TestCase):
             m_sys_exit.assert_called_with(1)
 
     def test_run_init(self):
+        """Test run method with argument 'init'"""
+        """
+        Check for desired calls for mode init
+        """
         with patch_object(sys, 'argv', [None, 'init', 'ns/ns', 'pod/pod', 'id']) as m_argv:
             calico_kubernetes.run()
 
     @patch('calico_kubernetes.calico_kubernetes.NetworkPlugin')
     def test_run_status(self, m_plugin):
+        """Test run method with argument 'status'"""
+        """
+        Check for desired calls for mode status
+        """
         with patch_object(sys, 'argv', [None, 'status', 'ns/ns', 'pod/pod', 'id']) as m_argv:
             calico_kubernetes.run()
             m_plugin().status.assert_called_once_with('ns_ns', 'pod_pod', 'id')
 
     @patch('calico_kubernetes.calico_kubernetes.NetworkPlugin')
     def test_run_delete(self, m_plugin):
+        """Test run method with argument 'teardown'"""
+        """
+        Check for desired calls for mode teardown
+        """
         with patch_object(sys, 'argv', [None, 'teardown', 'ns/ns', 'pod/pod', 'id']) as m_argv:
             calico_kubernetes.run()
             m_plugin().delete.assert_called_once_with('ns_ns', 'pod_pod', 'id')
 
     @patch('calico_kubernetes.calico_kubernetes.NetworkPlugin')
     def test_run_create(self, m_plugin):
+        """Test run method with argument 'setup'"""
+        """
+        Check for desired calls for mode setup
+        """
         with patch_object(sys, 'argv', [None, 'setup', 'ns/ns', 'pod/pod', 'id']) as m_argv:
             calico_kubernetes.run()
             m_plugin().create.assert_called_once_with('ns_ns', 'pod_pod', 'id')
@@ -1005,6 +1076,10 @@ class NetworkPluginTest(unittest.TestCase):
     @patch('logging.StreamHandler', autospec=True)
     @patch('logging.Formatter', autospec=True)
     def test_configure_root_logger(self, m_logging_f, m_logging_sh, m_logging_fh, m_os_makedirs, m_os_path):
+        """Test configure_logger with root_logger=True"""
+        """
+        Check calls for valid arguments.
+        """
         m_os_path.exists.return_value = False
         m_log = Mock()
         f_handler = Mock()
@@ -1030,36 +1105,39 @@ class NetworkPluginTest(unittest.TestCase):
     @patch('logging.StreamHandler', autospec=True)
     @patch('logging.Formatter', autospec=True)
     def test_configure_child_logger(self, m_logging_f, m_logging_sh, m_logging_fh, m_os_makedirs, m_os_path):
+        """Test configure_logger with root_logger=False"""
+        """
+        Ensure correct format applied.
+        """
         m_os_path.exists.return_value = False
         m_log = Mock()
-        f_handler = Mock()
-        s_handler = Mock()
-        m_logging_fh.return_value = f_handler
-        m_logging_sh.return_value = s_handler
 
         logutils.configure_logger(m_log, logging.DEBUG, False, '/mock/')
 
-        m_os_makedirs.assert_called_once_with('/mock/')
-        m_logging_fh.assert_called_once_with(filename='/mock/calico.log',
-                                             maxBytes=10000000,
-                                             backupCount=5)
-        m_logging_sh.assert_called_once_with(sys.stdout)
-        s_handler.setLevel.assert_called_once_with(logging.INFO)
         m_logging_f.assert_called_once_with(LOG_FORMAT)
-        m_log.addHandler.has_calls([(f_handler), (s_handler)])
-        m_log.setLevel.assert_called_once_with(logging.DEBUG)
 
     def test_api_root_secure_true(self):
+        """Test api_root_secure output for https"""
+        """
+        Should return True
+        """
         calico_kubernetes.KUBE_API_ROOT = "https://test.com"
         return_val = self.plugin._api_root_secure()
-        self.assertTrue(return_val)
-    
+        assert_true(return_val)
+
     def test_api_root_secure_false(self):
+        """Test api_root_secure output for http"""
+        """
+        Should return False
+        """
         calico_kubernetes.KUBE_API_ROOT = "http://test.com"
         return_val = self.plugin._api_root_secure()
-        self.assertFalse(return_val)
-    
+        assert_false(return_val)
+
     def test_api_root_secure_error(self):
+        """Test api_root_secure output for invalid http(s) scheme"""
+        """
+        Should raise SystemExit
+        """
         calico_kubernetes.KUBE_API_ROOT = "invalid"
-        with self.assertRaises(SystemExit):
-            return_val = self.plugin._api_root_secure()
+        self.assertRaises(SystemExit, self.plugin._api_root_secure)
