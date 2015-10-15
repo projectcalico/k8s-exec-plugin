@@ -969,6 +969,7 @@ class NetworkPluginTest(unittest.TestCase):
         # Intialize args
         pod = {}
         self.plugin.profile_name = 'profile_name'
+        self.plugin.namespace = 'ns'
         self.m_datastore_client.get_profile.return_value = Mock()
 
         # Call method under test

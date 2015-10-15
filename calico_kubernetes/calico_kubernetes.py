@@ -1,4 +1,6 @@
 #!/bin/python
+# Import print_function to use a testable "print()" function 
+# instead of keyword "print".
 from __future__ import print_function
 
 import os
@@ -738,6 +740,7 @@ class NetworkPlugin(object):
         """
         Pull metadata for namespace and return it and a generated NS tag
         """
+        assert self.namespace
         ns_tag = self._escape_chars('%s=%s' % ('namespace', self.namespace))
         return ns_tag
 
