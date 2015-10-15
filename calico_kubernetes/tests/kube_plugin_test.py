@@ -11,8 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import logging
 
-import json
 import unittest
 from mock import patch, Mock, call
 from netaddr import IPAddress, IPNetwork
@@ -23,16 +23,18 @@ from calico_kubernetes import calico_kubernetes
 from pycalico.datastore import IF_PREFIX
 from pycalico.datastore_datatypes import Profile, Endpoint
 from pycalico.block import AlreadyAssignedError
+from nose.tools import assert_true
 
-# noinspection PyUnresolvedReferences
+# noinspection PyProtectedMember
 from calico_kubernetes.calico_kubernetes import _log_interfaces
 
+# noinspection PyUnresolvedReferences
 patch_object = patch.object
-
 
 TEST_HOST = calico_kubernetes.HOSTNAME
 TEST_ORCH_ID = calico_kubernetes.ORCHESTRATOR_ID
 
+_log = logging.getLogger(__name__)
 
 
 class NetworkPluginTest(unittest.TestCase):
@@ -481,7 +483,6 @@ class NetworkPluginTest(unittest.TestCase):
             m_datastore_client.profile_exists.assert_called_once_with(profile_name)
             self.assertFalse(m_datastore_client.create_profile.called)
 
-
     def test_get_pod_ports(self):
         # Initialize pod dictionary and expected outcome
         pod = {'spec': {'containers': [{'ports': [1, 2, 3]},{'ports': [4, 5]}]}}
@@ -547,71 +548,33 @@ class NetworkPluginTest(unittest.TestCase):
             with self.assertRaises(KeyError):
                 self.plugin._get_pod_config()
 
-    def test_get_api_path(self):
-        with patch_object(self.plugin, '_get_api_token',
-                          autospec=True) as m_api_token, \
-                patch('calico_kubernetes.calico_kubernetes.requests.Session',
-                      autospec=True) as m_session, \
-                patch_object(json, 'loads', autospec=True) as m_json_load:
-            # Set up mock objects
-            m_api_token.return_value = 'Token'
-            m_session_return = Mock()
-            m_session_return.headers = Mock()
-            m_get_return = Mock()
-            m_get_return.text = 'response_body'
-            m_session_return.get.return_value = m_get_return
-            m_session.return_value = m_session_return
+    @patch('calico_kubernetes.calico_kubernetes.requests.Session',
+           autospec=True)
+    @patch('json.loads', autospec=True)
+    def test_get_api_path(self, m_json_load, m_session):
+        # Set up mock objects
+        self.plugin.auth_token = 'TOKEN'
+        m_session_return = Mock()
+        m_session_return.headers = Mock()
+        m_get_return = Mock()
+        m_get_return.text = 'response_body'
+        m_session_return.get.return_value = m_get_return
+        m_session.return_value = m_session_return
 
-            # Initialize args
-            path = 'path/to/api/object'
+        # Initialize args
+        path = 'path/to/api/object'
 
-            # Call method under test
-            self.plugin._get_api_path(path)
+        # Call method under test
+        self.plugin._get_api_path(path)
 
-            # Assert
-            m_api_token.assert_called_once_with()
-            m_session.assert_called_once_with()
-            m_session_return.headers.update.assert_called_once_with(
-                {'Authorization': 'Bearer ' + 'Token'})
-            m_session_return.get.assert_called_once_with(
-                calico_kubernetes.KUBE_API_ROOT + 'path/to/api/object',
-                verify=False)
-            m_json_load.assert_called_once_with('response_body')
-
-    def test_get_api_token(self):
-        with patch('__builtin__.open', autospec=True) as m_open, \
-                patch_object(json, 'loads', autospec=True) as m_json:
-            # Set up mock objects
-            m_open().__enter__().read.return_value = 'json_string'
-            m_open.reset_mock()
-            m_json.return_value = {'BearerToken' : 'correct_return'}
-
-            # Call method under test
-            return_val = self.plugin._get_api_token()
-
-            # Assert
-            m_open.assert_called_once_with('/var/lib/kubelet/kubernetes_auth')
-            m_json.assert_called_once_with('json_string')
-            self.assertEqual(return_val, 'correct_return')
-
-    def test_get_api_token_no_auth_file(self):
-        """
-        Test _get_api_token when no autho token is found
-
-        Assert that the method returns an empty string
-        """
-        with patch('__builtin__.open', autospec=True) as m_open, \
-                patch_object(json, 'loads', autospec=True) as m_json:
-            # Set up mock objects
-            m_open.side_effect = IOError
-            m_json.return_value = {'BearerToken' : 'correct_return'}
-
-            # Call method under test
-            return_val = self.plugin._get_api_token()
-
-            m_open.assert_called_once_with('/var/lib/kubelet/kubernetes_auth')
-            self.assertFalse(m_json.called)
-            self.assertEqual(return_val, "")
+        # Assert
+        m_session.assert_called_once_with()
+        m_session_return.headers.update.assert_called_once_with(
+            {'Authorization': 'Bearer ' + 'TOKEN'})
+        m_session_return.get.assert_called_once_with(
+            calico_kubernetes.KUBE_API_ROOT + 'path/to/api/object',
+            verify=False)
+        m_json_load.assert_called_once_with('response_body')
 
     def test_generate_rules(self):
         pod = {'metadata': {'profile': 'name'}}
@@ -721,3 +684,33 @@ class NetworkPluginTest(unittest.TestCase):
                          call(['ip', 'netns', 'exec', 'testNAMESPACE',
                                'ip', 'addr'])
                      ])
+
+    @patch('sys.exit', autospec=True)
+    @patch('calico_kubernetes.calico_kubernetes.run')
+    @patch('calico_kubernetes.tests.kube_plugin_test.'
+           'calico_kubernetes.configure_logger', autospec=True)
+    def test_run_protected(self, m_conf_logger, m_run, m_sys_exit):
+        calico_kubernetes.run_protected()
+
+        # Check that the logger was set up; don't care about the details.
+        assert_true(len(m_conf_logger.mock_calls) > 0)
+        # Check we actually called the work function.
+        m_run.assert_called_with()
+        # We should exit without error.
+        m_sys_exit.assert_called_with(0)
+
+    @patch('sys.exit', autospec=True)
+    @patch('calico_kubernetes.calico_kubernetes.run')
+    @patch('calico_kubernetes.tests.kube_plugin_test.'
+           'calico_kubernetes.configure_logger', autospec=True)
+    def test_run_protected_sys_exit(self, _, m_run, m_sys_exit):
+        for exception_cls in (SystemExit, RuntimeError):
+            _log.info('Testing that we handle %s exceptions',
+                      str(exception_cls.__name__))
+            m_run.side_effect = exception_cls
+            calico_kubernetes.run_protected()
+
+            # Check we actually called the work function.
+            m_run.assert_called_with()
+            # We should exit with an error.
+            m_sys_exit.assert_called_with(1)
