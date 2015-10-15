@@ -3,7 +3,7 @@ import logging
 import os
 import sys
 
-LOG_DIR = '/var/log/calico/kubernetes'
+LOG_DIR = '/var/log/calico/kubernetes/'
 ROOT_LOG_FORMAT = '%(asctime)s %(process)d %(levelname)s %(message)s'
 LOG_FORMAT = '%(asctime)s %(process)d %(levelname)s %(filename)s: %(message)s'
 
@@ -27,7 +27,9 @@ def configure_logger(logger, log_level, root_logger=False, log_dir=LOG_DIR):
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
 
-    file_hdlr = logging.FileHandler(filename=log_dir+'/calico.log')
+    file_hdlr = logging.handlers.RotatingFileHandler(filename=log_dir+'calico.log',
+                                                     maxBytes=10000000,
+                                                     backupCount=5)
     stdout_hdlr = logging.StreamHandler(sys.stdout)
     stdout_hdlr.setLevel(logging.INFO)
 
