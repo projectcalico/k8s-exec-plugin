@@ -844,5 +844,5 @@ def run():
                 NetworkPlugin().delete(namespace, pod_name, docker_id)
 
 
-if __name__ == '__main__':
+if __name__ == '__main__':  # pragma: no cover
     run_protected()
