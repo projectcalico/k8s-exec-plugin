@@ -1,23 +1,29 @@
 #!/bin/python
-import json
+# Import print_function to use a testable "print()" function 
+# instead of keyword "print".
+from __future__ import print_function
+
 import os
-import sys
+import sh
 import re
+import sys
+import json
 import socket
+import logging
+import requests
+
 from docker import Client
 from docker.errors import APIError
-from subprocess import check_output, CalledProcessError, check_call
-import requests
-import sh
-import logging
-from netaddr import IPAddress, IPNetwork, AddrFormatError
 from logutils import configure_logger
+from netaddr import IPAddress, IPNetwork, AddrFormatError
+from subprocess import check_output, CalledProcessError, check_call
+
 import pycalico
 from pycalico import netns
-from pycalico.datastore import IF_PREFIX
-from pycalico.util import generate_cali_interface_name, get_host_ips
 from pycalico.ipam import IPAMClient
+from pycalico.datastore import IF_PREFIX
 from pycalico.block import AlreadyAssignedError
+from pycalico.util import generate_cali_interface_name, get_host_ips
 
 logger = logging.getLogger(__name__)
 pycalico_logger = logging.getLogger(pycalico.__name__)
@@ -146,7 +152,7 @@ class NetworkPlugin(object):
         }
 
         logger.debug("Writing status to stdout: \n%s", json.dumps(json_dict))
-        print json.dumps(json_dict)
+        print(json.dumps(json_dict))
 
     def _configure_profile(self, endpoint):
         """
@@ -684,12 +690,8 @@ class NetworkPlugin(object):
 
         # Grab namespace and create a tag if it exists.
         ns_tag = self._get_namespace_tag(pod)
-
-        if ns_tag:
-            logger.info('Adding tag %s', ns_tag)
-            profile.tags.add(ns_tag)
-        else:
-            logger.warning('Namespace tag cannot be generated')
+        logger.info('Adding tag %s', ns_tag)
+        profile.tags.add(ns_tag)
 
         # Create tags from labels
         labels = self._get_metadata(pod, 'labels')
@@ -738,6 +740,7 @@ class NetworkPlugin(object):
         """
         Pull metadata for namespace and return it and a generated NS tag
         """
+        assert self.namespace
         ns_tag = self._escape_chars('%s=%s' % ('namespace', self.namespace))
         return ns_tag
 
