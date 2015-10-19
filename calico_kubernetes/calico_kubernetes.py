@@ -1,28 +1,42 @@
-#!/bin/python
+# Copyright 2015 Metaswitch Networks
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # Import print_function to use a testable "print()" function 
 # instead of keyword "print".
 from __future__ import print_function
 
 import os
-import sh
 import re
+import requests
+import logging
 import sys
 import json
 import socket
-import logging
-import requests
 
 from docker import Client
 from docker.errors import APIError
 from logutils import configure_logger
 from netaddr import IPAddress, IPNetwork, AddrFormatError
+from policy import PolicyParser
 from subprocess import check_output, CalledProcessError, check_call
 
 import pycalico
 from pycalico import netns
-from pycalico.ipam import IPAMClient
-from pycalico.datastore import IF_PREFIX
 from pycalico.block import AlreadyAssignedError
+from pycalico.datastore import IF_PREFIX
+from pycalico.datastore_datatypes import Rule, Rules
+from pycalico.ipam import IPAMClient
 from pycalico.util import generate_cali_interface_name, get_host_ips
 
 logger = logging.getLogger(__name__)
@@ -63,20 +77,19 @@ class NetworkPlugin(object):
         self.namespace = None
         self.docker_id = None
         self.auth_token = os.environ.get('KUBE_AUTH_TOKEN', None)
+        self.policy_parser = None
 
         self._datastore_client = IPAMClient()
-        self.calicoctl = sh.Command(CALICOCTL_PATH).bake(_env=os.environ)
         self._docker_client = Client(
             version=DOCKER_VERSION,
             base_url=os.getenv("DOCKER_HOST", "unix://var/run/docker.sock"))
 
     def create(self, namespace, pod_name, docker_id):
         """"Create a pod."""
-        # Calicoctl does not support the '-' character in iptables rule names.
-        # TODO: fix Felix to support '-' characters.
         self.pod_name = pod_name
         self.docker_id = docker_id
         self.namespace = namespace
+        self.policy_parser = PolicyParser(self.namespace)
         self.profile_name = "%s_%s_%s" % (self.namespace,
                                           self.pod_name,
                                           str(self.docker_id)[:12])
@@ -156,9 +169,7 @@ class NetworkPlugin(object):
 
     def _configure_profile(self, endpoint):
         """
-        Configure the calico profile for a pod.
-
-        Currently assumes one pod with each name.
+        Configure the calico profile on the given endpoint.
         """
         pod = self._get_pod_config()
 
@@ -169,13 +180,13 @@ class NetworkPlugin(object):
                          self.profile_name)
             sys.exit(1)
         else:
-            self._datastore_client.create_profile(self.profile_name)
+            rules = self._generate_rules(pod)
+            self._datastore_client.create_profile(self.profile_name, rules)
 
-        self._apply_rules(pod)
-
+        # Add tags to the profile.
         self._apply_tags(pod)
 
-        # Also set the profile for the workload.
+        # Set the profile for the workload.
         logger.info('Setting profile %s on endpoint %s',
                     self.profile_name, endpoint.endpoint_id)
         self._datastore_client.set_profiles_on_endpoint(
@@ -550,120 +561,48 @@ class NetworkPlugin(object):
     def _generate_rules(self, pod):
         """
         Generate Rules takes human readable policy strings in annotations
-        and creates argument arrays for calicoctl
+        and returns a libcalico Rules object.
 
         :return tuple of inbound_rules, outbound_rules
         """
-
-        ns_tag = self._get_namespace_tag(pod)
-
-        # kube-system services need to be accessed by all namespaces
-        if self.namespace == "kube-system":
-            logger.info("Pod %s belongs to the kube-system namespace - "
-                        "allow all inbound and outbound traffic", pod)
-            return [["allow"]], [["allow"]]
-
-        if self.namespace and DEFAULT_POLICY == 'ns_isolation':
-            inbound_rules = [["allow", "from", "tag", ns_tag]]
-            outbound_rules = [["allow"]]
-        else:
-            inbound_rules = [["allow"]]
-            outbound_rules = [["allow"]]
-
-        logger.info("Getting Policy Rules from Annotation of pod %s", pod)
-
+        # Create allow and per-namespace rules for later use.
+        allow = Rule(action="allow")
+        allow_ns = Rule(action="allow", src_tag=self._get_namespace_tag(pod))
         annotations = self._get_metadata(pod, "annotations")
+        logger.debug("Found annotations: %s", annotations)
 
-        # Find policy block of annotations
-        if annotations and POLICY_ANNOTATION_KEY in annotations:
-            # Remove Default Rule (Allow Namespace)
-            inbound_rules = []
+        if self.namespace == "kube-system" :
+            # Pods in the kube-system namespace must be accessible by all
+            # other pods for services like DNS to work.
+            logger.info("Pod is in kube-system namespace - allow all")
+            inbound_rules = [allow]
+            outbound_rules = [allow]
+        elif annotations and POLICY_ANNOTATION_KEY in annotations:
+            # If policy annotations are defined, use them to generate rules.
+            logger.info("Generating advanced security policy from annotations")
             rules = annotations[POLICY_ANNOTATION_KEY]
-
-            # Rules separated by semicolons
+            inbound_rules = []
+            outbound_rules = [allow]
             for rule in rules.split(";"):
-                args = rule.split(" ")
+                parsed_rule = self.policy_parser.parse_line(rule)
+                inbound_rules.append(parsed_rule)
+        else:
+            # If not annotations are defined, just use the configured
+            # default policy.
+            if DEFAULT_POLICY == 'ns_isolation':
+                # Isolate on namespace boundaries by default.
+                logger.debug("Default policy is namespace isolation")
+                inbound_rules = [allow_ns]
+                outbound_rules = [allow]
+            else:
+                # Allow all traffic by default.
+                logger.debug("Default policy is allow all")
+                inbound_rules = [allow]
+                outbound_rules = [allow]
 
-                # Labels in annotations use the format 'label X=Y'
-                # These must be converted into format 'tag NAMSPACE_X_Y' to
-                # be parsed by calicoctl.
-                if 'label' in args:
-                    # Replace arg 'label' with arg 'tag'
-                    label_ind = args.index('label')
-                    args[label_ind] = 'tag'
-
-                    # Split given label 'key=value' into 'key', 'value'
-                    label = args[label_ind + 1]
-                    key, value = label.split('=')
-
-                    # Compose Calico tag out of key, value components
-                    tag = self._label_to_tag(key, value)
-                    args[label_ind + 1] = tag
-
-                # Remove empty strings and add to rule list
-                args = filter(None, args)
-                inbound_rules.append(args)
-
-        return inbound_rules, outbound_rules
-
-    def _apply_rules(self, pod):
-        """
-        Generate a rules for a given profile based on annotations.
-        1) Remove Calicoctl default rules
-        2) Create new profiles based on annotations, and establish new defaults
-
-        Exceptions:
-            If namespace = kube-system (internal kube services), allow all.
-            If no policy in annotations, allow from pod's Namespace
-            Outbound policy should allow all traffic
-
-        :param pod: pod info to parse
-        :type pod: dict()
-        :return:
-        """
-        try:
-            profile = self._datastore_client.get_profile(self.profile_name)
-        except:
-            logger.exception("ERROR: Could not apply rules. Profile not "
-                             "found: %s, exiting", self.profile_name)
-            sys.exit(1)
-
-        inbound_rules, outbound_rules = self._generate_rules(pod)
-
-        logger.info("Removing Default Rules")
-
-        # Remove default rules. Assumes 2 inbound, 1 outbound.
-        try:
-            self.calicoctl('profile', self.profile_name, 'rule', 'remove',
-                           'inbound', '--at=2')
-            self.calicoctl('profile', self.profile_name, 'rule', 'remove',
-                           'inbound', '--at=1')
-            self.calicoctl('profile', self.profile_name, 'rule', 'remove',
-                           'outbound', '--at=1')
-        except sh.ErrorReturnCode as e:
-            logger.error('Could not delete default rules for profile %s '
-                         '(assumed 2 inbound, 1 outbound)\n%s',
-                         self.profile_name, e)
-
-        # Call calicoctl to populate inbound rules
-        for rule in inbound_rules:
-            logger.info('applying inbound rule \n%s', rule)
-            try:
-                self.calicoctl('profile', self.profile_name, 'rule', 'add',
-                               'inbound', rule)
-            except sh.ErrorReturnCode as e:
-                logger.error('Could not apply inbound rule %s.\n%s', rule, e)
-
-        # Call calicoctl to populate outbound rules
-        for rule in outbound_rules:
-            logger.info('applying outbound rule \n%s', rule)
-            try:
-                self.calicoctl('profile', self.profile_name, 'rule', 'add',
-                               'outbound', rule)
-            except sh.ErrorReturnCode as e:
-                logger.error('Could not apply outbound rule %s.\n%s', rule, e)
-
-        logger.info('Finished applying rules.')
+        return Rules(id=self.profile_name,
+                     inbound_rules=inbound_rules,
+                     outbound_rules=outbound_rules)
 
     def _apply_tags(self, pod):
         """
@@ -718,7 +657,7 @@ class NetworkPlugin(object):
             logger.warning('No %s found in pod %s', key, pod)
             return None
 
-        logger.debug("%s of pod %s:\n%s", key, pod, val)
+        logger.debug("Pod %s: %s", key, val)
         return val
 
     def _escape_chars(self, unescaped_string):
@@ -831,7 +770,6 @@ def run():
             logger.info("Using LOG_LEVEL=%s", LOG_LEVEL)
             logger.info("Using ETCD_AUTHORITY=%s",
                         os.environ[ETCD_AUTHORITY_ENV])
-            logger.info("Using CALICOCTL_PATH=%s", CALICOCTL_PATH)
             logger.info("Using KUBE_API_ROOT=%s", KUBE_API_ROOT)
             logger.info("Using CALICO_IPAM=%s", CALICO_IPAM)
             logger.info("Using DEFAULT_POLICY=%s", DEFAULT_POLICY)
