@@ -774,7 +774,8 @@ def _log_interfaces(namespace):
         namespaces = check_output(['ip', 'netns', 'list'])
         logger.debug("Namespaces:\n%s", namespaces)
 
-        namespace_interfaces = check_output(['ip', 'netns', 'exec', namespace,
+        namespace_interfaces = check_output(['ip', 'netns',
+                                             'exec', str(namespace),
                                              'ip', 'addr'])
         logger.debug("Interfaces in namespace %s:\n%s",
                      namespace, namespace_interfaces)
