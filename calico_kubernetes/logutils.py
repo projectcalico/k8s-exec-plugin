@@ -1,14 +1,18 @@
 #!/bin/python
 import logging
+from cloghandler import ConcurrentRotatingFileHandler
 import os
 import sys
 
 LOG_DIR = '/var/log/calico/kubernetes/'
 ROOT_LOG_FORMAT = '%(asctime)s %(process)d %(levelname)s %(message)s'
+DOCKER_ID_ROOT_LOG_FORMAT = '%(asctime)s %(process)d [%(identity)s] %(levelname)s %(message)s'
 LOG_FORMAT = '%(asctime)s %(process)d %(levelname)s %(filename)s: %(message)s'
+DOCKER_ID_LOG_FORMAT = '%(asctime)s %(process)d [%(identity)s] %(levelname)s %(filename)s: %(message)s'
 
 
-def configure_logger(logger, log_level, root_logger=False, log_dir=LOG_DIR):
+def configure_logger(logger, log_level, log_format=LOG_FORMAT, 
+                     log_to_stdout=True, log_dir=LOG_DIR):
     """
     Configures logging to the file 'calico.log' in the specified log directory
 
@@ -20,49 +24,38 @@ def configure_logger(logger, log_level, root_logger=False, log_dir=LOG_DIR):
 
     :param logger: logger object to configure
     :param log_level: level at which logger starts logging.
-    :param root_logger: True indicates logger is calico_kubernetes.
+    :param log_format: Indicates which logging scheme to use.
+    :param log_to_stdout: If True, configure the stdout stream handler.
     :param log_dir: Directory where calico.log lives. If None set to default
     :return:
     """
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
 
-    file_hdlr = logging.handlers.RotatingFileHandler(filename=log_dir+'calico.log',
-                                                     maxBytes=10000000,
-                                                     backupCount=5)
+    formatter = logging.Formatter(log_format)
 
-    # Determine which formatter to use.
-    if root_logger:
-        formatter = logging.Formatter(ROOT_LOG_FORMAT)
-    else:
-        formatter = logging.Formatter(LOG_FORMAT)
-
-    # Set formatters on handlers
+    file_hdlr = ConcurrentRotatingFileHandler(filename=log_dir+'calico.log',
+                                              maxBytes=1000000,
+                                              backupCount=5)
     file_hdlr.setFormatter(formatter)
 
     logger.addHandler(file_hdlr)
     logger.setLevel(log_level)
 
-def configure_stdout_logger(logger, log_level=logging.INFO, root_logger=False):
+    # Create an stdout handler and apply it to the logger
+    if log_to_stdout:
+        stdout_hdlr = logging.StreamHandler(sys.stdout)
+        stdout_hdlr.setLevel(log_level)
+        stdout_hdlr.setFormatter(formatter)
+        logger.addHandler(stdout_hdlr)
+
+class IdentityFilter(logging.Filter):
     """
-    Configure an stdout logging handler to the logger
-
-    If a log level is not indicated use the logger's current logging level
-
-    :param logger:  logger object to configure
-    :param log_level: log_level: level at which logger starts logging.
-    :return:
+    Filter class to impart contextual identity information onto loggers.
     """
-    # Determine which formatter to use.
-    if root_logger:
-        formatter = logging.Formatter(ROOT_LOG_FORMAT)
-    else:
-        formatter = logging.Formatter(LOG_FORMAT)
+    def __init__(self, identity):
+        self.identity = identity
 
-    # Create the handler and apply attributes
-    stdout_hdlr = logging.StreamHandler(sys.stdout)
-    stdout_hdlr.setLevel(log_level)
-    stdout_hdlr.setFormatter(formatter)
-
-    # Add handler to the logger object
-    logger.addHandler(stdout_hdlr)
+    def filter(self, record):
+        record.identity = self.identity
+        return True

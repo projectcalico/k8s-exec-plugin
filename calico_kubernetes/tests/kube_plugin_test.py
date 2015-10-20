@@ -31,7 +31,7 @@ from pycalico.datastore_datatypes import Profile, Endpoint
 
 # noinspection PyProtectedMember
 from calico_kubernetes.calico_kubernetes import _log_interfaces, POLICY_ANNOTATION_KEY
-from calico_kubernetes.logutils import ROOT_LOG_FORMAT, LOG_FORMAT
+from calico_kubernetes.logutils import ROOT_LOG_FORMAT, LOG_FORMAT, DOCKER_ID_ROOT_LOG_FORMAT, DOCKER_ID_LOG_FORMAT
 
 # noinspection PyUnresolvedReferences
 patch_object = patch.object
@@ -1053,144 +1053,123 @@ class NetworkPluginTest(unittest.TestCase):
                                    'ip', 'addr'])
                          ])
 
+    @parameterized.expand([
+        ('init'),
+        ('setup'),
+        ('status'),
+        ('teardown'),
+    ])
     @patch('sys.exit', autospec=True)
     @patch('calico_kubernetes.calico_kubernetes.run')
     @patch('calico_kubernetes.tests.kube_plugin_test.'
            'calico_kubernetes.configure_logger', autospec=True)
-    def test_run_protected(self, m_conf_logger, m_run, m_sys_exit):
+    def test_run_protected(self, m_mode, m_conf_logger, m_run, m_sys_exit):
         """Test global method run_protected
 
         Ensure code path not broken
         """
-        calico_kubernetes.run_protected()
+        if m_mode == 'init':
+            patch_args = [None, m_mode]
+        else:
+            patch_args = [None, m_mode, 'ns/ns', 'pod/pod', 'id']
+
+        with patch_object(sys, 'argv', patch_args) as m_argv:
+            calico_kubernetes.run_protected()
 
         # Check that the logger was set up; don't care about the details.
         assert_true(len(m_conf_logger.mock_calls) > 0)
         # Check we actually called the work function.
-        m_run.assert_called_with()
+        if m_mode == 'init':
+            m_run.assert_called_with(mode=m_mode, namespace=None, pod_name=None, docker_id=None)
+        else:
+            m_run.assert_called_with(mode=m_mode, namespace='ns_ns', pod_name='pod_pod', docker_id='id')
         # We should exit without error.
         m_sys_exit.assert_called_with(0)
 
+    @patch('sys.exit', autospec=True)
     @patch('calico_kubernetes.calico_kubernetes.run')
     @patch('calico_kubernetes.tests.kube_plugin_test.'
            'calico_kubernetes.configure_logger', autospec=True)
-    def test_run_protected_sys_exit(self, _, m_run):
+    def test_run_protected_sys_exit(self, _, m_run, m_sys_exit):
         """Test failure in global method run_protected"""
         for exception_cls in (SystemExit, RuntimeError):
             _log.info('Testing that we handle %s exceptions',
                       str(exception_cls.__name__))
             m_run.side_effect = exception_cls
 
-            assert_raises(SystemExit, calico_kubernetes.run_protected)
+            with patch_object(sys, 'argv', [None, 'status', 'ns/ns', 'pod/pod', 'id']) as m_argv:
+                calico_kubernetes.run_protected()
 
-            # Check we actually called the work function.
-            m_run.assert_called_with()
+            # We should exit without error.
+            m_sys_exit.assert_called_with(1)
 
-    def test_run_init(self):
-        """Test run method with argument 'init'
-
-        Check for desired calls for mode init
-        """
-        with patch_object(sys, 'argv', [None, 'init', 'ns/ns', 'pod/pod', 'id']) as m_argv:
-            calico_kubernetes.run()
-
+    # mode, namespace, pod_name, docker_id
+    @parameterized.expand([
+        ('init', None, None, None),
+        ('setup', 'ns_ns', 'pod_pod', 'id'),
+        ('teardown', 'ns_ns', 'pod_pod', 'id'),
+        ('status', 'ns_ns', 'pod_pod', 'id'),
+        ('invalid', 'ns_ns', 'pod_pod', 'id'),
+    ])
     @patch('calico_kubernetes.calico_kubernetes.NetworkPlugin')
-    def test_run_status(self, m_plugin):
-        """Test run method with argument 'status'
+    def test_run(self, m_mode, m_namespace, m_pod_name, m_docker_id, m_plugin):
+        """Test run method
 
-        Check for desired calls for mode status
+        Check for desired calls given a variety of inputs
         """
-        with patch_object(sys, 'argv', [None, 'status', 'ns/ns', 'pod/pod', 'id']) as m_argv:
-            calico_kubernetes.run()
-            m_plugin().status.assert_called_once_with('ns_ns', 'pod_pod', 'id')
+        calico_kubernetes.run(m_mode, m_namespace, m_pod_name, m_docker_id)
+        if m_mode == 'status':
+            m_plugin().status.assert_called_once_with(m_namespace, m_pod_name, m_docker_id)
+        elif m_mode == 'setup':
+            m_plugin().create.assert_called_once_with(m_namespace, m_pod_name, m_docker_id)
+        elif m_mode == 'teardown':
+            m_plugin().delete.assert_called_once_with(m_namespace, m_pod_name, m_docker_id)
+        else:
+            assert_false(m_plugin.called)
 
-    @patch('calico_kubernetes.calico_kubernetes.NetworkPlugin')
-    def test_run_delete(self, m_plugin):
-        """Test run method with argument 'teardown'
-
-        Check for desired calls for mode teardown
-        """
-        with patch_object(sys, 'argv', [None, 'teardown', 'ns/ns', 'pod/pod', 'id']) as m_argv:
-            calico_kubernetes.run()
-            m_plugin().delete.assert_called_once_with('ns_ns', 'pod_pod', 'id')
-
-    @patch('calico_kubernetes.calico_kubernetes.NetworkPlugin')
-    def test_run_create(self, m_plugin):
-        """Test run method with argument 'setup'
-
-        Check for desired calls for mode setup
-        """
-        with patch_object(sys, 'argv', [None, 'setup', 'ns/ns', 'pod/pod', 'id']) as m_argv:
-            calico_kubernetes.run()
-            m_plugin().create.assert_called_once_with('ns_ns', 'pod_pod', 'id')
-
+    @parameterized.expand([
+        (True,),
+        (False,),
+    ])
     @patch('os.path', autospec=True)
     @patch('os.makedirs', autospec=True)
-    @patch('logging.handlers.RotatingFileHandler', autospec=True)
+    @patch('calico_kubernetes.logutils.ConcurrentRotatingFileHandler', 
+           autospec=True)
+    @patch('logging.StreamHandler', autospec=True)
     @patch('logging.Formatter', autospec=True)
-    def test_configure_root_logger(self, m_logging_f, m_logging_fh, m_os_makedirs, m_os_path):
-        """Test configure_logger with root_logger=True
+    def test_configure_logger(self, m_log_to_stdout, m_logging_f, m_logging_sh,
+                              m_logging_fh, m_os_makedirs, m_os_path):
+        """Test configure_logger
 
         Check calls for valid arguments.
         """
         m_os_path.exists.return_value = False
         m_log = Mock()
         f_handler = Mock()
+        s_handler = Mock()
         m_logging_fh.return_value = f_handler
+        m_logging_sh.return_value = s_handler
 
-        logutils.configure_logger(m_log, logging.DEBUG, True, '/mock/')
+        logutils.configure_logger(logger=m_log,
+                                  log_level=logging.DEBUG,
+                                  log_format="FORMAT", 
+                                  log_to_stdout=m_log_to_stdout,
+                                  log_dir='/mock/')
 
         m_os_makedirs.assert_called_once_with('/mock/')
         m_logging_fh.assert_called_once_with(filename='/mock/calico.log',
-                                             maxBytes=10000000,
+                                             maxBytes=1000000,
                                              backupCount=5)
-        m_logging_f.assert_called_once_with(ROOT_LOG_FORMAT)
-        m_log.addHandler.assert_called_once_with(f_handler)
+        m_logging_f.assert_called_once_with("FORMAT")
         m_log.setLevel.assert_called_once_with(logging.DEBUG)
 
-    @patch('os.path', autospec=True)
-    @patch('os.makedirs', autospec=True)
-    @patch('logging.handlers.RotatingFileHandler', autospec=True)
-    @patch('logging.Formatter', autospec=True)
-    def test_configure_child_logger(self, m_logging_f, m_logging_fh, m_os_makedirs, m_os_path):
-        """Test configure_logger with root_logger=False
+        # Test stdout config calls.
+        if m_log_to_stdout:
+            m_log.addHandler.assert_has_calls([call(f_handler), 
+                                               call(s_handler)])
+        else:
+            m_log.addHandler.assert_called_once_with(f_handler)
 
-        Ensure correct format applied.
-        """
-        m_os_path.exists.return_value = False
-        m_log = Mock()
-
-        logutils.configure_logger(m_log, logging.DEBUG, False, '/mock/')
-
-        m_logging_f.assert_called_once_with(LOG_FORMAT)
-
-    @patch('logging.StreamHandler', autospec=True)
-    @patch('logging.Formatter', autospec=True)
-    def test_configure_stdout_root_logger(self, m_logging_f, m_logging_sh):
-        m_log = Mock()
-        s_handler = Mock()
-        m_logging_sh.return_value = s_handler
-
-        logutils.configure_stdout_logger(m_log, logging.INFO, True)
-
-        m_logging_sh.assert_called_once_with(sys.stdout)
-        s_handler.setLevel.assert_called_once_with(logging.INFO)
-        m_logging_f.assert_called_once_with(ROOT_LOG_FORMAT)
-        m_log.addHandler.assert_called_once_with(s_handler)
-
-    @patch('logging.StreamHandler', autospec=True)
-    @patch('logging.Formatter', autospec=True)
-    def test_configure_stdout_child_logger(self, m_logging_f, m_logging_sh):
-        m_log = Mock()
-        s_handler = Mock()
-        m_logging_sh.return_value = s_handler
-
-        logutils.configure_stdout_logger(m_log, logging.INFO, False)
-
-        m_logging_sh.assert_called_once_with(sys.stdout)
-        s_handler.setLevel.assert_called_once_with(logging.INFO)
-        m_logging_f.assert_called_once_with(LOG_FORMAT)
-        m_log.addHandler.assert_called_once_with(s_handler)
 
     def test_api_root_secure_true(self):
         """Test api_root_secure output for https
