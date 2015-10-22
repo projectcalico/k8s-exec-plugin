@@ -767,9 +767,9 @@ def run():
             logger.info('Executing Calico pod-status hook')
             NetworkPlugin().status(namespace, pod_name, docker_id)
         else:
-            # Append an stdout logging handler to log to the Kubelet
-            # We cannot do this in status hook because K8 looks to stdout
-            # for status results.
+            # Append a stdout logging handler to log to the Kubelet.
+            # We cannot do this in the status hook because the Kubelet looks to
+            # stdout for status results.
             configure_stdout_logger(logger, logging.INFO, True)
             configure_stdout_logger(pycalico_logger, logging.INFO, False)
 
