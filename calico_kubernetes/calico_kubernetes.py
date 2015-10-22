@@ -26,7 +26,7 @@ import socket
 
 from docker import Client
 from docker.errors import APIError
-from logutils import configure_logger
+from logutils import configure_logger, configure_stdout_logger
 from netaddr import IPAddress, IPNetwork, AddrFormatError
 from policy import PolicyParser
 from subprocess import check_output, CalledProcessError, check_call
@@ -767,6 +767,12 @@ def run():
             logger.info('Executing Calico pod-status hook')
             NetworkPlugin().status(namespace, pod_name, docker_id)
         else:
+            # Append a stdout logging handler to log to the Kubelet.
+            # We cannot do this in the status hook because the Kubelet looks to
+            # stdout for status results.
+            configure_stdout_logger(logger, logging.INFO, True)
+            configure_stdout_logger(pycalico_logger, logging.INFO, False)
+
             logger.info("Using LOG_LEVEL=%s", LOG_LEVEL)
             logger.info("Using ETCD_AUTHORITY=%s",
                         os.environ[ETCD_AUTHORITY_ENV])

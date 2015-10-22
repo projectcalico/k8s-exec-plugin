@@ -1127,9 +1127,8 @@ class NetworkPluginTest(unittest.TestCase):
     @patch('os.path', autospec=True)
     @patch('os.makedirs', autospec=True)
     @patch('logging.handlers.RotatingFileHandler', autospec=True)
-    @patch('logging.StreamHandler', autospec=True)
     @patch('logging.Formatter', autospec=True)
-    def test_configure_root_logger(self, m_logging_f, m_logging_sh, m_logging_fh, m_os_makedirs, m_os_path):
+    def test_configure_root_logger(self, m_logging_f, m_logging_fh, m_os_makedirs, m_os_path):
         """Test configure_logger with root_logger=True
 
         Check calls for valid arguments.
@@ -1137,9 +1136,7 @@ class NetworkPluginTest(unittest.TestCase):
         m_os_path.exists.return_value = False
         m_log = Mock()
         f_handler = Mock()
-        s_handler = Mock()
         m_logging_fh.return_value = f_handler
-        m_logging_sh.return_value = s_handler
 
         logutils.configure_logger(m_log, logging.DEBUG, True, '/mock/')
 
@@ -1147,18 +1144,15 @@ class NetworkPluginTest(unittest.TestCase):
         m_logging_fh.assert_called_once_with(filename='/mock/calico.log',
                                              maxBytes=10000000,
                                              backupCount=5)
-        m_logging_sh.assert_called_once_with(sys.stdout)
-        s_handler.setLevel.assert_called_once_with(logging.INFO)
         m_logging_f.assert_called_once_with(ROOT_LOG_FORMAT)
-        m_log.addHandler.has_calls([(f_handler), (s_handler)])
+        m_log.addHandler.assert_called_once_with(f_handler)
         m_log.setLevel.assert_called_once_with(logging.DEBUG)
 
     @patch('os.path', autospec=True)
     @patch('os.makedirs', autospec=True)
     @patch('logging.handlers.RotatingFileHandler', autospec=True)
-    @patch('logging.StreamHandler', autospec=True)
     @patch('logging.Formatter', autospec=True)
-    def test_configure_child_logger(self, m_logging_f, m_logging_sh, m_logging_fh, m_os_makedirs, m_os_path):
+    def test_configure_child_logger(self, m_logging_f, m_logging_fh, m_os_makedirs, m_os_path):
         """Test configure_logger with root_logger=False
 
         Ensure correct format applied.
@@ -1169,6 +1163,34 @@ class NetworkPluginTest(unittest.TestCase):
         logutils.configure_logger(m_log, logging.DEBUG, False, '/mock/')
 
         m_logging_f.assert_called_once_with(LOG_FORMAT)
+
+    @patch('logging.StreamHandler', autospec=True)
+    @patch('logging.Formatter', autospec=True)
+    def test_configure_stdout_root_logger(self, m_logging_f, m_logging_sh):
+        m_log = Mock()
+        s_handler = Mock()
+        m_logging_sh.return_value = s_handler
+
+        logutils.configure_stdout_logger(m_log, logging.INFO, True)
+
+        m_logging_sh.assert_called_once_with(sys.stdout)
+        s_handler.setLevel.assert_called_once_with(logging.INFO)
+        m_logging_f.assert_called_once_with(ROOT_LOG_FORMAT)
+        m_log.addHandler.assert_called_once_with(s_handler)
+
+    @patch('logging.StreamHandler', autospec=True)
+    @patch('logging.Formatter', autospec=True)
+    def test_configure_stdout_child_logger(self, m_logging_f, m_logging_sh):
+        m_log = Mock()
+        s_handler = Mock()
+        m_logging_sh.return_value = s_handler
+
+        logutils.configure_stdout_logger(m_log, logging.INFO, False)
+
+        m_logging_sh.assert_called_once_with(sys.stdout)
+        s_handler.setLevel.assert_called_once_with(logging.INFO)
+        m_logging_f.assert_called_once_with(LOG_FORMAT)
+        m_log.addHandler.assert_called_once_with(s_handler)
 
     def test_api_root_secure_true(self):
         """Test api_root_secure output for https
