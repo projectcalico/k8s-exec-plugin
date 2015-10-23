@@ -1,0 +1,14 @@
+[Unit]
+Description=Kubernetes Proxy
+Documentation=https://github.com/kubernetes/kubernetes
+After=calico-node.service
+Requires=calico-node.service
+
+[Service]
+EnvironmentFile=/etc/network-environment
+ExecStart=/usr/bin/kube-proxy --master=http://${KUBERNETES_MASTER}:8080 --logtostderr=true --proxy-mode=iptables
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

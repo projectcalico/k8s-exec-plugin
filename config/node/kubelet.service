@@ -1,0 +1,22 @@
+[Unit]
+Description=Kubernetes Kubelet
+Documentation=https://github.com/kubernetes/kubernetes
+After=calico-node.service
+Requires=calico-node.service
+
+[Service]
+EnvironmentFile=/etc/network-environment
+ExecStart=/usr/bin/kubelet \
+--address=0.0.0.0 \
+--port=10250 \
+--hostname_override=${DEFAULT_IPV4} \
+--cluster-dns=10.100.0.10 \
+--cluster-domain=cluster.local \
+--api_servers=${KUBERNETES_MASTER}:8080 \
+--network_plugin=calico \
+--logtostderr=true
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
