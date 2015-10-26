@@ -1,0 +1,16 @@
+#! /usr/bin/bash
+
+# This node's IPv4 address
+DEFAULT_IPV4=<DEFAULT_IPV4>
+
+# The Kubernetes master IP
+KUBERNETES_MASTER=<KUBERNETES_MASTER>
+
+# IP and port of etcd instance used by Calico
+ETCD_AUTHORITY=<KUBERNETES_MASTER>:6666
+
+# URL to access the Kubernetes apiserver
+KUBE_API_ROOT=http://<KUBERNETES_MASTER>:8080/api/v1/
+
+# Enable Calcio IPAM
+CALICO_IPAM=true
