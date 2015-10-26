@@ -41,7 +41,7 @@ spec:
         - "/hyperkube" 
         - "apiserver"
         - "--allow-privileged=true"
-        - "--etcd-servers=http://127.0.0.1:4001"
+        - "--etcd-servers=http://127.0.0.1:2379"
         - "--insecure-bind-address=0.0.0.0"
         - "--service-cluster-ip-range=10.100.0.0/24"
         - "--logtostderr=true"
