@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Import print_function to use a testable "print()" function 
+# Import print_function to use a testable "print()" function
 # instead of keyword "print".
 from __future__ import print_function
 
@@ -26,7 +26,7 @@ import socket
 
 from docker import Client
 from docker.errors import APIError
-from logutils import configure_logger, configure_stdout_logger
+
 from netaddr import IPAddress, IPNetwork, AddrFormatError
 from policy import PolicyParser
 from subprocess import check_output, CalledProcessError, check_call
@@ -39,8 +39,10 @@ from pycalico.datastore_datatypes import Rule, Rules
 from pycalico.ipam import IPAMClient
 from pycalico.util import generate_cali_interface_name, get_host_ips
 
-logger = logging.getLogger(__name__)
+from logutils import *
+
 pycalico_logger = logging.getLogger(pycalico.__name__)
+logger = logging.getLogger(__name__)
 LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO').upper()
 
 DOCKER_VERSION = "1.16"
@@ -726,15 +728,52 @@ def run_protected():
     """
     Runs the plugin, intercepting all exceptions.
     """
-    # Configure logging
-    configure_logger(logger, LOG_LEVEL, True)
-    configure_logger(pycalico_logger, LOG_LEVEL, False)
+    # Parse arguments and configure logging
+    global logger, pycalico_logger
+    mode = sys.argv[1]
+    namespace = sys.argv[2].replace('/', '_') if len(sys.argv) >=3 else None
+    pod_name = sys.argv[3].replace('/', '_') if len(sys.argv) >=4 else None
+    docker_id = sys.argv[4] if len(sys.argv) >=5 else None
+
+    # Append a stdout logging handler to log to the Kubelet.
+    # We cannot do this in the status hook because the Kubelet looks to
+    # stdout for status results.
+    log_to_stdout = (mode != 'status')
+
+    # Filter the logger to append the Docker ID to logs.
+    # If docker_id is not supplied, do not include it in logger config.
+    if docker_id:
+        configure_logger(logger=logger,
+                         log_level=LOG_LEVEL,
+                         log_format=DOCKER_ID_ROOT_LOG_FORMAT,
+                         log_to_stdout=log_to_stdout)
+        configure_logger(logger=pycalico_logger,
+                         log_level=LOG_LEVEL,
+                         log_format=DOCKER_ID_LOG_FORMAT,
+                         log_to_stdout=log_to_stdout)
+
+        docker_filter = IdentityFilter(identity=str(docker_id)[:12])
+        logger.addFilter(docker_filter)
+        pycalico_logger.addFilter(docker_filter)
+    else:
+        configure_logger(logger=logger,
+                         log_level=LOG_LEVEL,
+                         log_format=ROOT_LOG_FORMAT,
+                         log_to_stdout=log_to_stdout)
+        configure_logger(logger=pycalico_logger,
+                         log_level=LOG_LEVEL,
+                         log_format=LOG_FORMAT,
+                         log_to_stdout=log_to_stdout)
 
     # Try to run the plugin, logging out any BaseExceptions raised.
     logger.info("Begin Calico network plugin execution")
+    logger.info('Plugin Args: %s', sys.argv)
     rc = 0
     try:
-        run()
+        run(mode=mode,
+            namespace=namespace,
+            pod_name=pod_name,
+            docker_id=docker_id)
     except SystemExit:
         # If a SystemExit is thrown, we've already handled the error and have
         # called sys.exit().  No need to produce a duplicate exception
@@ -749,43 +788,28 @@ def run_protected():
         logger.info("Calico network plugin execution complete")
         sys.exit(rc)
 
-def run():
-    logger.info('Plugin Args: %s', sys.argv)
-    mode = sys.argv[1]
-
+def run(mode, namespace, pod_name, docker_id):
     if mode == 'init':
         logger.info('No initialization work to perform')
+    elif mode == "status":
+        # Status is called on a regular basis - handle separately
+        # to avoid flooding the logs.
+        logger.info('Executing Calico pod-status hook')
+        NetworkPlugin().status(namespace, pod_name, docker_id)
     else:
-        # These args only present for setup/teardown.
-        namespace = sys.argv[2].replace('/', '_')
-        pod_name = sys.argv[3].replace('/', '_')
-        docker_id = sys.argv[4]
+        logger.info("Using LOG_LEVEL=%s", LOG_LEVEL)
+        logger.info("Using ETCD_AUTHORITY=%s",
+                    os.environ[ETCD_AUTHORITY_ENV])
+        logger.info("Using KUBE_API_ROOT=%s", KUBE_API_ROOT)
+        logger.info("Using CALICO_IPAM=%s", CALICO_IPAM)
+        logger.info("Using DEFAULT_POLICY=%s", DEFAULT_POLICY)
 
-        if mode == "status":
-            # Status is called on a regular basis - handle separately
-            # to avoid flooding the logs.
-            logger.info('Executing Calico pod-status hook')
-            NetworkPlugin().status(namespace, pod_name, docker_id)
-        else:
-            # Append a stdout logging handler to log to the Kubelet.
-            # We cannot do this in the status hook because the Kubelet looks to
-            # stdout for status results.
-            configure_stdout_logger(logger, logging.INFO, True)
-            configure_stdout_logger(pycalico_logger, logging.INFO, False)
-
-            logger.info("Using LOG_LEVEL=%s", LOG_LEVEL)
-            logger.info("Using ETCD_AUTHORITY=%s",
-                        os.environ[ETCD_AUTHORITY_ENV])
-            logger.info("Using KUBE_API_ROOT=%s", KUBE_API_ROOT)
-            logger.info("Using CALICO_IPAM=%s", CALICO_IPAM)
-            logger.info("Using DEFAULT_POLICY=%s", DEFAULT_POLICY)
-
-            if mode == 'setup':
-                logger.info('Executing Calico pod-creation hook')
-                NetworkPlugin().create(namespace, pod_name, docker_id)
-            elif mode == 'teardown':
-                logger.info('Executing Calico pod-deletion hook')
-                NetworkPlugin().delete(namespace, pod_name, docker_id)
+        if mode == 'setup':
+            logger.info('Executing Calico pod-creation hook')
+            NetworkPlugin().create(namespace, pod_name, docker_id)
+        elif mode == 'teardown':
+            logger.info('Executing Calico pod-deletion hook')
+            NetworkPlugin().delete(namespace, pod_name, docker_id)
 
 
 if __name__ == '__main__':  # pragma: no cover
