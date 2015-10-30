@@ -1049,9 +1049,18 @@ class NetworkPluginTest(unittest.TestCase):
                              call(['ip', 'addr']),
                              call(['ip', 'netns', 'list']),
                              # Check we always pass a string to check_output
-                             call(['ip', 'netns', 'exec', str(ns),
-                                   'ip', 'addr'])
+                             call(['ip', 'netns', 'exec', str(ns), 'ip', 'addr'])
                          ])
+
+    def test_log_error(self):
+        with patch('calico_kubernetes.tests.kube_plugin_test.'
+                   'calico_kubernetes.check_output',
+                   autospec=True) as m_check_output:
+            # Mock to throw Exception
+            m_check_output.side_effect = CalledProcessError
+
+            # Call function, assert Exception is caught.
+            _log_interfaces("12345")
 
     @parameterized.expand([
         ('init'),

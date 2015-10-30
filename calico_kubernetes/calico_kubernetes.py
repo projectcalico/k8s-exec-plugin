@@ -158,7 +158,7 @@ class NetworkPlugin(object):
                                "to endpoint %s", self.docker_id)
             ip = ip_net[0].ip
 
-        logger.info("Retrieved IP Address: %s", ip)
+        logger.info("Retrieved pod IP Address: %s", ip)
 
         json_dict = {
             "apiVersion": "v1beta1",
@@ -711,18 +711,22 @@ def _log_interfaces(namespace):
     :param namespace
     :type namespace str
     """
-    if logger.isEnabledFor(logging.DEBUG):
-        interfaces = check_output(['ip', 'addr'])
-        logger.debug("Interfaces in default namespace:\n%s", interfaces)
+    try:
+        if logger.isEnabledFor(logging.DEBUG):
+            interfaces = check_output(['ip', 'addr'])
+            logger.debug("Interfaces in default namespace:\n%s", interfaces)
 
-        namespaces = check_output(['ip', 'netns', 'list'])
-        logger.debug("Namespaces:\n%s", namespaces)
+            namespaces = check_output(['ip', 'netns', 'list'])
+            logger.debug("Namespaces:\n%s", namespaces)
 
-        namespace_interfaces = check_output(['ip', 'netns',
-                                             'exec', str(namespace),
-                                             'ip', 'addr'])
-        logger.debug("Interfaces in namespace %s:\n%s",
-                     namespace, namespace_interfaces)
+            cmd = ['ip', 'netns', 'exec', str(namespace), 'ip', 'addr']
+            namespace_interfaces = check_output(cmd)
+
+            logger.debug("Interfaces in namespace %s:\n%s",
+                         namespace, namespace_interfaces)
+    except BaseException:
+        # Don't exit if we hit an error logging out the interfaces.
+        logger.exception("Ignoring error logging interfaces")
 
 def run_protected():
     """
