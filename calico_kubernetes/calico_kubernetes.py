@@ -151,7 +151,7 @@ class NetworkPlugin(object):
             # for them.
             logger.debug("Ignoring status for pod %s/%s in host namespace",
                          self.namespace, self.pod_name)
-            sys.exit(1)
+            sys.exit(0)
 
         # Find the endpoint
         try:
@@ -429,9 +429,9 @@ class NetworkPlugin(object):
 
         # We can't set up Calico if the container shares the host namespace.
         if info["HostConfig"]["NetworkMode"] == "host":
-            logger.error("Can't add the container to Calico because "
-                         "it is running NetworkMode = host.")
-            sys.exit(1)
+            logger.warning("Calico cannot network container because "
+                           "it is running NetworkMode = host.")
+            sys.exit(0)
 
     def _uses_host_networking(self, container_name):
         """
@@ -875,8 +875,8 @@ def run_protected():
     except SystemExit, e:
         # If a SystemExit is thrown, we've already handled the error and have
         # called sys.exit().  No need to produce a duplicate exception
-        # message, just set the return code to 1.
-        rc = e.code
+        # message, just return the exit code.
+        rc = e
     except BaseException:
         # Log the exception and set the return code to 1.
         logger.exception("Unhandled Exception killed plugin")
