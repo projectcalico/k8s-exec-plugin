@@ -101,7 +101,7 @@ class NetworkPlugin(object):
         self.profile_name = "%s_%s_%s" % (self.namespace,
                                           self.pod_name,
                                           str(self.docker_id)[:12])
-        logger.info('Configuring pod %s/%s (container_id %s)', 
+        logger.info('Configuring pod %s/%s (container_id %s)',
                     self.namespace, self.pod_name, self.docker_id)
 
         try:
@@ -147,7 +147,7 @@ class NetworkPlugin(object):
 
         if self._uses_host_networking(self.docker_id):
             # We don't perform networking / assign IP addresses for pods running
-            # in the host namespace, and so we can't return a status update 
+            # in the host namespace, and so we can't return a status update
             # for them.
             logger.debug("Ignoring status for pod %s/%s in host namespace",
                          self.namespace, self.pod_name)
@@ -528,44 +528,35 @@ class NetworkPlugin(object):
         return ports
 
     def _get_pod_config(self):
-        """Get the list of pods from the Kube API server."""
-        pods = self._get_api_path('pods')
-        logger.debug('Got all pods: %s', pods)
+        """Get the pod resource from the API.
+        API Path depends on the api_root, namespace, and pod_name
 
-        for pod in pods:
-            logger.debug('Processing pod %s', pod)
-            ns = pod['metadata']['namespace'].replace('/', '_')
-            name = pod['metadata']['name'].replace('/', '_')
-            if ns == self.namespace and name == self.pod_name:
-                this_pod = pod
-                break
-        else:
-            raise KeyError('Pod not found: ' + self.pod_name)
-        logger.debug('Found pod %s/%s: %s', self.namespace, 
-                     self.pod_name, this_pod)
-        return this_pod
-
-    def _get_api_path(self, path):
-        """Get a resource from the API specified API path.
-
-        e.g.
-        _get_api_path('pods')
-
-        :param path: The relative path to an API endpoint.
-        :return: A list of JSON API objects
-        :rtype list
+        :return: JSON object containing the pod spec
         """
-        logger.debug("Getting API Resource: %s", path)
-        session = requests.Session()
-        if self.auth_token:
-            session.headers.update({'Authorization':
-                                    'Bearer ' + self.auth_token})
-        response = session.get(self.api_root + path, verify=False)
-        response_body = response.text
+        with requests.Session() as session:
+            if self._api_root_secure() and self.auth_token:
+                session.headers.update({'Authorization':
+                                        'Bearer ' + self.auth_token})
 
-        # The response body contains some metadata, and the pods themselves
-        # under the 'items' key.
-        return json.loads(response_body)['items']
+            path = os.path.join(self.api_root,
+                                'namespaces/%s/pods/%s' % (self.namespace,
+                                                           self.pod_name))
+            try:
+                logger.debug('Fetching API Resource from %s', path)
+                response = session.get(path, verify=False)
+            except BaseException:
+                logger.exception("Exception hitting Kubernetes API")
+                sys.exit(1)
+            else:
+                if response.status_code != 200:
+                    logger.error("Response from API returned %s Error:\n%s",
+                                 response.status_code,
+                                 response.text)
+                    sys.exit(response.status_code)
+
+        logger.debug("API Response: %s", response.text)
+        pod = json.loads(response.text)
+        return pod
 
     def _api_root_secure(self):
         """
@@ -665,9 +656,7 @@ class NetworkPlugin(object):
                 tag = self._label_to_tag(k, v)
                 logger.debug('Adding tag %s', tag)
                 profile.tags.add(tag)
-        else:
-            logger.warning('No labels found on pod %s/%s',
-                           self.namespace, self.pod_name)
+
         self._datastore_client.profile_update_tags(profile)
         logger.debug('Finished applying tags.')
 
@@ -679,7 +668,7 @@ class NetworkPlugin(object):
         try:
             val = pod['metadata'][key]
         except (KeyError, TypeError):
-            logger.warning('No %s found in pod %s', key, pod)
+            logger.debug('No %s found in pod %s', key, pod)
             return None
 
         logger.debug("Pod %s: %s", key, val)
@@ -876,7 +865,7 @@ def run_protected():
         # If a SystemExit is thrown, we've already handled the error and have
         # called sys.exit().  No need to produce a duplicate exception
         # message, just return the exit code.
-        rc = e
+        rc = e.code
     except BaseException:
         # Log the exception and set the return code to 1.
         logger.exception("Unhandled Exception killed plugin")
@@ -891,13 +880,6 @@ def run(mode, namespace, pod_name, docker_id, config):
     if mode == 'init':
         logger.info('No initialization work to perform')
     else:
-        logger.debug("Using LOG_LEVEL=%s", LOG_LEVEL)
-        logger.debug("Using ETCD_AUTHORITY=%s",
-                    os.environ[ETCD_AUTHORITY_ENV])
-        logger.debug("Using KUBE_API_ROOT=%s", KUBE_API_ROOT)
-        logger.debug("Using CALICO_IPAM=%s", CALICO_IPAM)
-        logger.debug("Using DEFAULT_POLICY=%s", DEFAULT_POLICY)
-
         if mode == 'setup':
             logger.info('Executing Calico pod-creation hook')
             NetworkPlugin(config).create(namespace, pod_name, docker_id)
