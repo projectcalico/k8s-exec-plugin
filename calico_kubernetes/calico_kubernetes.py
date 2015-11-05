@@ -101,16 +101,19 @@ class NetworkPlugin(object):
         self.profile_name = "%s_%s_%s" % (self.namespace,
                                           self.pod_name,
                                           str(self.docker_id)[:12])
-
-        logger.info('Configuring docker container %s', self.docker_id)
+        logger.info('Configuring pod %s/%s (container_id %s)', 
+                    self.namespace, self.pod_name, self.docker_id)
 
         try:
             endpoint = self._configure_interface()
+            logger.info("Created Calico endpoint: %s", endpoint.endpoint_id)
             self._configure_profile(endpoint)
         except CalledProcessError as e:
             logger.error('Error code %d creating pod networking: %s\n%s',
                          e.returncode, e.output, e)
             sys.exit(1)
+        logger.info("Successfully configured networking for pod %s/%s",
+                    self.namespace, self.pod_name)
 
     def delete(self, namespace, pod_name, docker_id):
         """Cleanup after a pod."""
@@ -121,23 +124,34 @@ class NetworkPlugin(object):
                                           self.pod_name,
                                           str(self.docker_id)[:12])
 
-        logger.info('Deleting container %s with profile %s',
-                    self.docker_id, self.profile_name)
+        logger.info('Removing networking from pod %s/%s (container id %s)',
+                    self.namespace, self.pod_name, self.docker_id)
 
         # Remove the profile for the workload.
         self._container_remove()
 
         # Delete profile
         try:
+            logger.info("Deleting Calico profile: %s", self.profile_name)
             self._datastore_client.remove_profile(self.profile_name)
         except:
             logger.warning("Cannot remove profile %s; Profile cannot "
                            "be found.", self.profile_name)
+        logger.info("Successfully removed networking for pod %s/%s",
+                    self.namespace, self.pod_name)
 
     def status(self, namespace, pod_name, docker_id):
         self.namespace = namespace
         self.pod_name = pod_name
         self.docker_id = docker_id
+
+        if self._uses_host_networking(self.docker_id):
+            # We don't perform networking / assign IP addresses for pods running
+            # in the host namespace, and so we can't return a status update 
+            # for them.
+            logger.debug("Ignoring status for pod %s/%s in host namespace",
+                         self.namespace, self.pod_name)
+            sys.exit(1)
 
         # Find the endpoint
         try:
@@ -147,24 +161,24 @@ class NetworkPlugin(object):
                 workload_id=self.docker_id
             )
         except KeyError:
-            logger.error("Container %s doesn't contain any endpoints",
-                         self.docker_id)
+            logger.error("Error in status: No endpoint for pod: %s/%s",
+                         self.namespace, self.pod_name)
             sys.exit(1)
 
         # Retrieve IPAddress from the attached IPNetworks on the endpoint
         # Since Kubernetes only supports ipv4, we'll only check for ipv4 nets
         if not endpoint.ipv4_nets:
-            logger.error("Exiting. No IPs attached to endpoint %s",
-                         self.docker_id)
+            logger.error("Error in status: No IPs attached to pod %s/%s",
+                         self.namespace, self.pod_name)
             sys.exit(1)
         else:
             ip_net = list(endpoint.ipv4_nets)
             if len(ip_net) is not 1:
                 logger.warning("There is more than one IPNetwork attached "
-                               "to endpoint %s", self.docker_id)
+                               "to pod %s/%s", self.namespace, self.pod_name)
             ip = ip_net[0].ip
 
-        logger.info("Retrieved pod IP Address: %s", ip)
+        logger.debug("Retrieved pod IP Address: %s", ip)
 
         json_dict = {
             "apiVersion": "v1beta1",
@@ -200,7 +214,7 @@ class NetworkPlugin(object):
         self._datastore_client.set_profiles_on_endpoint(
             [self.profile_name], endpoint_id=endpoint.endpoint_id
         )
-        logger.info('Finished configuring profile.')
+        logger.debug('Finished configuring profile.')
 
     def _configure_interface(self):
         """Configure the Calico interface for a pod.
@@ -229,7 +243,7 @@ class NetworkPlugin(object):
         interface_name = generate_cali_interface_name(IF_PREFIX,
                                                       ep.endpoint_id)
         node_ip = self._get_node_ip()
-        logger.info('Adding IP %s to interface %s', node_ip, interface_name)
+        logger.debug('Adding node IP %s to host-side veth %s', node_ip, interface_name)
 
         # This is slightly tricky. Since the kube-proxy sometimes
         # programs REDIRECT iptables rules, we MUST have an IP on the host end
@@ -285,11 +299,11 @@ class NetworkPlugin(object):
 
         # Create the veth, move into the container namespace, add the IP and
         # set up the default routes.
-        logger.info("Creating the veth with namespace pid %s on interface "
-                    "name %s", pid, interface)
+        logger.debug("Creating the veth with namespace pid %s on interface "
+                     "name %s", pid, interface)
         ep.mac = ep.provision_veth(netns.PidNamespace(pid), interface)
 
-        logger.info("Setting mac address %s to endpoint %s", ep.mac, ep.name)
+        logger.debug("Setting mac address %s to endpoint %s", ep.mac, ep.name)
         self._datastore_client.set_endpoint(ep)
 
         # Let the caller know what endpoint was created.
@@ -390,7 +404,7 @@ class NetworkPlugin(object):
         self._datastore_client.release_ips(ip_set)
 
         # Remove the veth interface from endpoint
-        logger.info("Removing veth interface from endpoint %s", endpoint.name)
+        logger.info("Removing veth interfaces")
         try:
             netns.remove_veth(endpoint.name)
         except CalledProcessError:
@@ -401,11 +415,9 @@ class NetworkPlugin(object):
         try:
             self._datastore_client.remove_workload(
                 HOSTNAME, ORCHESTRATOR_ID, self.docker_id)
-            logger.info("Successfully removed workload from datastore")
         except KeyError:
             logger.exception("Failed to remove workload.")
-
-        logger.info("Removed Calico interface from %s", self.docker_id)
+        logger.info("Removed Calico endpoint %s", endpoint.endpoint_id)
 
     def _validate_container_state(self, container_name):
         info = self._get_container_info(container_name)
@@ -420,6 +432,14 @@ class NetworkPlugin(object):
             logger.error("Can't add the container to Calico because "
                          "it is running NetworkMode = host.")
             sys.exit(1)
+
+    def _uses_host_networking(self, container_name):
+        """
+        Returns true if the given container is running in the
+        host network namespace.
+        """
+        info = self._get_container_info(container_name)
+        return info["HostConfig"]["NetworkMode"] == "host"
 
     def _get_container_info(self, container_name):
         try:
@@ -453,7 +473,7 @@ class NetworkPlugin(object):
 
         try:
             addr = addrs[0]
-            logger.info('Using IP Address %s', addr)
+            logger.debug("Node's IP address: %s", addr)
             return addr
         except IndexError:
             # If both get_host_ips return empty lists, print message and exit.
@@ -464,14 +484,14 @@ class NetworkPlugin(object):
 
     def _delete_docker_interface(self):
         """Delete the existing veth connecting to the docker bridge."""
-        logger.info('Deleting docker interface eth0')
+        logger.debug('Deleting docker interface eth0')
 
         # Get the PID of the container.
         pid = str(self._get_container_pid(self.docker_id))
-        logger.info('Container %s running with PID %s', self.docker_id, pid)
+        logger.debug('Container %s running with PID %s', self.docker_id, pid)
 
         # Set up a link to the container's netns.
-        logger.info("Linking to container's netns")
+        logger.debug("Linking to container's netns")
         logger.debug(check_output(['mkdir', '-p', '/var/run/netns']))
         netns_file = '/var/run/netns/' + pid
         if not os.path.isfile(netns_file):
@@ -510,7 +530,7 @@ class NetworkPlugin(object):
     def _get_pod_config(self):
         """Get the list of pods from the Kube API server."""
         pods = self._get_api_path('pods')
-        logger.debug('Got pods %s', pods)
+        logger.debug('Got all pods: %s', pods)
 
         for pod in pods:
             logger.debug('Processing pod %s', pod)
@@ -521,7 +541,8 @@ class NetworkPlugin(object):
                 break
         else:
             raise KeyError('Pod not found: ' + self.pod_name)
-        logger.debug('Got pod data %s', this_pod)
+        logger.debug('Found pod %s/%s: %s', self.namespace, 
+                     self.pod_name, this_pod)
         return this_pod
 
     def _get_api_path(self, path):
@@ -534,7 +555,7 @@ class NetworkPlugin(object):
         :return: A list of JSON API objects
         :rtype list
         """
-        logger.info('Getting API Resource: %s%s', self.api_root, path)
+        logger.debug("Getting API Resource: %s", path)
         session = requests.Session()
         if self.auth_token:
             session.headers.update({'Authorization':
@@ -623,7 +644,7 @@ class NetworkPlugin(object):
         :type pod: dict
         :return:
         """
-        logger.info('Applying tags')
+        logger.debug('Applying tags')
 
         try:
             profile = self._datastore_client.get_profile(self.profile_name)
@@ -634,7 +655,7 @@ class NetworkPlugin(object):
 
         # Grab namespace and create a tag if it exists.
         ns_tag = self._get_namespace_tag(pod)
-        logger.info('Adding tag %s', ns_tag)
+        logger.debug('Adding tag %s', ns_tag)
         profile.tags.add(ns_tag)
 
         # Create tags from labels
@@ -642,14 +663,13 @@ class NetworkPlugin(object):
         if labels:
             for k, v in labels.iteritems():
                 tag = self._label_to_tag(k, v)
-                logger.info('Adding tag %s', tag)
+                logger.debug('Adding tag %s', tag)
                 profile.tags.add(tag)
         else:
-            logger.warning('No labels found in pod %s', pod)
-
+            logger.warning('No labels found on pod %s/%s',
+                           self.namespace, self.pod_name)
         self._datastore_client.profile_update_tags(profile)
-
-        logger.info('Finished applying tags.')
+        logger.debug('Finished applying tags.')
 
     def _get_metadata(self, pod, key):
         """
@@ -843,8 +863,8 @@ def run_protected():
                          log_to_stdout=log_to_stdout)
 
     # Try to run the plugin, logging out any BaseExceptions raised.
-    logger.info("Begin Calico network plugin execution")
-    logger.info('Plugin Args: %s', sys.argv)
+    logger.debug("Begin Calico network plugin execution")
+    logger.debug('Plugin Args: %s', sys.argv)
     rc = 0
     try:
         run(mode=mode,
@@ -852,18 +872,18 @@ def run_protected():
             pod_name=pod_name,
             docker_id=docker_id,
             config=config)
-    except SystemExit:
+    except SystemExit, e:
         # If a SystemExit is thrown, we've already handled the error and have
         # called sys.exit().  No need to produce a duplicate exception
         # message, just set the return code to 1.
-        rc = 1
+        rc = e.code
     except BaseException:
         # Log the exception and set the return code to 1.
         logger.exception("Unhandled Exception killed plugin")
         rc = 1
     finally:
         # Log that we've finished, and exit with the correct return code.
-        logger.info("Calico network plugin execution complete")
+        logger.debug("Calico network plugin execution complete, rc=%s", rc)
         sys.exit(rc)
 
 
@@ -871,7 +891,13 @@ def run(mode, namespace, pod_name, docker_id, config):
     if mode == 'init':
         logger.info('No initialization work to perform')
     else:
-        # Create the plugin instance, passing in config.
+        logger.debug("Using LOG_LEVEL=%s", LOG_LEVEL)
+        logger.debug("Using ETCD_AUTHORITY=%s",
+                    os.environ[ETCD_AUTHORITY_ENV])
+        logger.debug("Using KUBE_API_ROOT=%s", KUBE_API_ROOT)
+        logger.debug("Using CALICO_IPAM=%s", CALICO_IPAM)
+        logger.debug("Using DEFAULT_POLICY=%s", DEFAULT_POLICY)
+
         if mode == 'setup':
             logger.info('Executing Calico pod-creation hook')
             NetworkPlugin(config).create(namespace, pod_name, docker_id)

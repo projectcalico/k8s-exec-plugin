@@ -80,7 +80,9 @@ class NetworkPluginTest(unittest.TestCase):
                 patch_object(self.plugin, '_configure_profile',
                              autospec=True) as m_configure_profile:
             # Set up mock objects
-            m_configure_interface.return_value = 'endpt_id'
+            endpoint = Mock()
+            endpoint.endpoint_id = "12345abcd_endpoint_id"
+            m_configure_interface.return_value = endpoint
 
             # Set up args
             namespace = 'ns'
@@ -97,7 +99,7 @@ class NetworkPluginTest(unittest.TestCase):
             assert_equal(docker_id, self.plugin.docker_id)
             assert_equal(profile_name, self.plugin.profile_name)
             m_configure_interface.assert_called_once_with()
-            m_configure_profile.assert_called_once_with('endpt_id')
+            m_configure_profile.assert_called_once_with(endpoint)
 
     def test_create_error(self):
         """Test Pod Creation Hook Failure"""
@@ -187,6 +189,20 @@ class NetworkPluginTest(unittest.TestCase):
                                                                      orchestrator_id=TEST_ORCH_ID,
                                                                      workload_id=docker_id)
         m_print.assert_called_once_with(json.dumps(json_dict))
+
+    @patch('__builtin__.print', autospec=True)
+    def test_status_host_network(self, m_print):
+        """Test Pod Status Hook for Host Networked Pod"""
+        # Set up args
+        namespace = 'ns'
+        pod_name = 'pod1'
+        docker_id = 123456789101112
+        self.plugin._uses_host_networking = Mock()
+        self.plugin._uses_host_networking.return_value = True
+
+        # Call method under test
+        assert_raises(SystemExit, self.plugin.status, namespace, pod_name, docker_id)
+        assert_false(self.m_datastore_client.get_endpoint.called)
 
     @patch('__builtin__.print', autospec=True)
     def test_status_no_ip(self, m_print):
@@ -1095,9 +1111,7 @@ class NetworkPluginTest(unittest.TestCase):
     @patch('calico_kubernetes.calico_kubernetes.load_config', autospec=True)
     def test_run_protected_sys_exit(self, m_load_config, _, m_run, m_sys_exit):
         """Test failure in global method run_protected"""
-        for exception_cls in (SystemExit, RuntimeError):
-            _log.info('Testing that we handle %s exceptions',
-                      str(exception_cls.__name__))
+        for exception_cls in (SystemExit(1), RuntimeError):
             m_run.side_effect = exception_cls
 
             with patch_object(sys, 'argv', [None, 'status', 'ns/ns', 'pod/pod', 'id']) as m_argv:
