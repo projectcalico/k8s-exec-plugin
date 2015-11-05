@@ -63,10 +63,13 @@ CONFIG = {
 class NetworkPluginTest(unittest.TestCase):
 
     def setUp(self):
-        self.namespace = "testNamespace"
         self.plugin = calico_kubernetes.NetworkPlugin(CONFIG)
-        self.plugin.namespace = self.namespace
-        self.plugin.profile_name = "test_profile_name"
+        self.plugin.namespace = "namespace"
+        self.plugin.pod_name = "podname"
+        self.plugin.docker_id = "dockeridabcd"
+
+        # We expect this profile name to be generated.
+        self.expected_profile_name = "namespace_podname_dockeridabcd"
 
         # Datastore and Docker Clients should be mocked
         self.m_datastore_client = MagicMock(spec=self.plugin._datastore_client)
@@ -99,7 +102,6 @@ class NetworkPluginTest(unittest.TestCase):
             assert_equal(namespace, self.plugin.namespace)
             assert_equal(pod_name, self.plugin.pod_name)
             assert_equal(docker_id, self.plugin.docker_id)
-            assert_equal(profile_name, self.plugin.profile_name)
             m_configure_interface.assert_called_once_with()
             m_configure_profile.assert_called_once_with(endpoint)
 
@@ -121,22 +123,50 @@ class NetworkPluginTest(unittest.TestCase):
 
     def test_delete(self):
         """Test Pod Deletion Hook"""
-        with patch_object(self.plugin, '_container_remove', autospec=True) as m_container_remove:
-            # Set up args
-            namespace = 'ns'
-            pod_name = 'pod1'
-            docker_id = 123456789101112
-            profile_name = 'ns_pod1_123456789101'
+        # Mock
+        m_container_remove = MagicMock(spec=self.plugin._container_remove)
+        self.plugin._container_remove = m_container_remove
+        m_get_endpoint = MagicMock(spec=self.plugin._get_endpoint)
+        endpoint = MagicMock()
+        endpoint.profile_ids = [1, 2, 3]
+        self.plugin._get_endpoint = m_get_endpoint
+        self.plugin._get_endpoint.return_value = endpoint
+        self.plugin.default_policy = "ns_isolation"
 
-            # Call method under test
-            self.plugin.delete(namespace, pod_name, docker_id)
+        # Mock so that first two profiles deleted, third does not exist.
+        side_effect = iter([None, None, KeyError])
+        self.plugin._datastore_client.remove_profile.side_effect = side_effect
 
-            # Assert expected output
-            m_container_remove.assert_called_once_with()
-            assert_equal(namespace, self.plugin.namespace)
-            assert_equal(pod_name, self.plugin.pod_name)
-            assert_equal(docker_id, self.plugin.docker_id)
-            assert_equal(profile_name, self.plugin.profile_name)
+        # Set up args
+        namespace = 'ns'
+        pod_name = 'pod1'
+        docker_id = 123456789101112
+
+        # Call method under test
+        self.plugin.delete(namespace, pod_name, docker_id)
+
+        # Assert expected output
+        m_container_remove.assert_called_once_with(m_get_endpoint())
+        assert_equal(namespace, self.plugin.namespace)
+        assert_equal(pod_name, self.plugin.pod_name)
+        assert_equal(docker_id, self.plugin.docker_id)
+
+    def test_delete_no_endpoint(self):
+        """Test Pod Deletion Hook when no endpoint exists"""
+        # Mock
+        m_container_remove = MagicMock(spec=self.plugin._container_remove)
+        self.plugin._container_remove = m_container_remove
+        m_get_endpoint = MagicMock(spec=self.plugin._get_endpoint)
+        self.plugin._get_endpoint = m_get_endpoint
+        self.plugin._get_endpoint.return_value = None
+
+        # Set up args
+        namespace = 'ns'
+        pod_name = 'pod1'
+        docker_id = 123456789101112
+
+        # Call method under test
+        assert_raises(SystemExit, self.plugin.delete, namespace, pod_name, docker_id)
 
     def test_delete_error(self):
         """Test Pod Deletion Hook Failure
@@ -398,14 +428,7 @@ class NetworkPluginTest(unittest.TestCase):
         orchestrator_id = TEST_ORCH_ID
 
         # Call method under test
-        self.plugin._container_remove()
-
-        # Assert
-        self.m_datastore_client.get_endpoint.assert_called_once_with(
-            hostname=hostname,
-            orchestrator_id=orchestrator_id,
-            workload_id='abcd'
-        )
+        self.plugin._container_remove(endpoint)
 
         m_remove_veth.assert_called_once_with(endpoint.name)
 
@@ -419,18 +442,7 @@ class NetworkPluginTest(unittest.TestCase):
         m_remove_veth.side_effect = CalledProcessError(1, '', '')
         self.m_datastore_client.remove_workload.side_effect = KeyError
 
-        self.plugin._container_remove()
-
-    def test_container_remove_no_endpoints(self):
-        """
-        Test _container_remove when the container does not container any endpoints
-
-        Expect a system exit
-        """
-        self.m_datastore_client.get_endpoint.side_effect = KeyError
-
-        # Call method under test
-        assert_raises(SystemExit, self.plugin._container_remove)
+        self.plugin._container_remove(MagicMock())
 
     def test_validate_container_state(self):
         with patch_object(self.plugin, '_get_container_info', autospec=True) as m_get_container_info:
@@ -693,12 +705,6 @@ class NetworkPluginTest(unittest.TestCase):
         m_get_pod_config.return_value = 'pod'
         m_get_namespace_tag.return_value = 'tag'
 
-        # Set up class members
-        pod_name = 'pod_name'
-        profile_name = 'profile_name'
-        self.plugin.pod_name = pod_name
-        self.plugin.profile_name = profile_name
-
         # Mock generation of rules
         expected_rules = Rules(id="id", inbound_rules=[], outbound_rules=[])
         m_generate_rules.return_value = expected_rules
@@ -711,12 +717,27 @@ class NetworkPluginTest(unittest.TestCase):
         self.plugin._configure_profile(endpoint)
 
         # Assert
-        self.m_datastore_client.profile_exists.assert_called_once_with(self.plugin.profile_name)
-        self.m_datastore_client.create_profile.assert_called_once_with(self.plugin.profile_name, expected_rules)
+        self.m_datastore_client.profile_exists.assert_called_once_with(self.expected_profile_name)
+        self.m_datastore_client.create_profile.assert_called_once_with(self.expected_profile_name, expected_rules)
         m_get_pod_config.assert_called_once_with()
-        m_apply_tags.assert_called_once_with('pod')
+        m_apply_tags.assert_called_once_with('pod', self.expected_profile_name)
         self.m_datastore_client.set_profiles_on_endpoint.assert_called_once_with(
-        [profile_name], endpoint_id=endpoint.endpoint_id)
+        [self.expected_profile_name], endpoint_id=endpoint.endpoint_id)
+
+    def test_configure_profile_no_policy(self):
+        """
+        Test configuring profile when DEFAULT_POLICY == "none"
+        """
+        # Mock
+        self.plugin.default_policy = "none"
+        self.plugin._datastore_client.profile_exists.return_value = False
+        endpoint = MagicMock(spec=Endpoint)
+        endpoint.endpoint_id = "12345678"
+
+        # Call
+        self.plugin._configure_profile(endpoint)
+
+        # Assert
 
     def test_configure_profile_profile_exists(self):
         """
@@ -730,10 +751,6 @@ class NetworkPluginTest(unittest.TestCase):
             self.m_datastore_client.profile_exists.return_value = True
             m_get_pod_config.return_value = 'pod'
 
-            # Set up class members
-            profile_name = 'profile_name'
-            self.plugin.profile_name = profile_name
-
             # Set up args
             endpoint = Endpoint(TEST_HOST, TEST_ORCH_ID, '1234', '5678',
                                 'active', 'mac')
@@ -745,7 +762,7 @@ class NetworkPluginTest(unittest.TestCase):
             # Assert
             m_get_pod_config.assert_called_once_with()
             self.m_datastore_client.profile_exists.assert_called_once_with(
-                profile_name)
+                self.expected_profile_name)
             assert_false(self.m_datastore_client.create_profile.called)
 
     def test_get_pod_ports(self):
@@ -891,7 +908,7 @@ class NetworkPluginTest(unittest.TestCase):
         self.plugin.namespace = 'ns'
 
         # Call method under test.
-        return_val = self.plugin._generate_rules(pod)
+        return_val = self.plugin._generate_rules(pod, self.expected_profile_name)
 
         # Expected calls
         expected = [call("allow from label key=value"),
@@ -919,12 +936,12 @@ class NetworkPluginTest(unittest.TestCase):
 
         # Expected result
         allow = [Rule(action="allow")]
-        expected = Rules(id=self.plugin.profile_name,
+        expected = Rules(id=self.expected_profile_name,
                          inbound_rules=allow,
                          outbound_rules=allow)
 
         # Call method under test empty annotations/namespace
-        return_val = self.plugin._generate_rules(pod)
+        return_val = self.plugin._generate_rules(pod, self.expected_profile_name)
         assert_equal(return_val, expected)
 
     def test_generate_rules_allow_all(self):
@@ -938,14 +955,13 @@ class NetworkPluginTest(unittest.TestCase):
                                 'namespace': 'ns'
                 }
               }
-        self.plugin.namespace = 'ns'
-        calico_kubernetes.DEFAULT_POLICY = 'allow'
+        self.plugin.default_policy = "allow"
 
         # Call method under test empty annotations/namespace
-        return_val = self.plugin._generate_rules(pod)
+        return_val = self.plugin._generate_rules(pod, self.expected_profile_name)
 
         allow = [Rule(action="allow")]
-        expected = Rules(id=self.plugin.profile_name,
+        expected = Rules(id=self.expected_profile_name,
                          inbound_rules=allow,
                          outbound_rules=allow)
 
@@ -970,14 +986,14 @@ class NetworkPluginTest(unittest.TestCase):
         self.plugin.default_policy = "ns_isolation"
 
         # Call method under test empty annotations/namespace
-        return_val = self.plugin._generate_rules(pod)
+        return_val = self.plugin._generate_rules(pod, self.expected_profile_name)
 
         # Assert return value is correct.
         expected = [call("allow from label key=value")]
         assert_equal(self.plugin.policy_parser.parse_line.mock_calls, expected)
 
         inbound = [self.plugin.policy_parser.parse_line()]
-        expected = Rules(id=self.plugin.profile_name,
+        expected = Rules(id=self.expected_profile_name,
                          inbound_rules=inbound,
                          outbound_rules=[{'action': 'allow'}])
         assert_equal(return_val, expected)
@@ -990,12 +1006,12 @@ class NetworkPluginTest(unittest.TestCase):
         ns_tag = "namespace_%s" % self.plugin.namespace
         inbound = [Rule(action="allow", src_tag=ns_tag)]
         outbound = [Rule(action="allow")]
-        expected = Rules(id=self.plugin.profile_name,
+        expected = Rules(id=self.expected_profile_name,
                          inbound_rules=inbound,
                          outbound_rules=outbound)
 
         # Call method under test empty annotations/namespace
-        return_val = self.plugin._generate_rules(pod)
+        return_val = self.plugin._generate_rules(pod, self.expected_profile_name)
 
         # Assert
         self.assertEqual(return_val, expected)
@@ -1010,7 +1026,7 @@ class NetworkPluginTest(unittest.TestCase):
         self.plugin.policy_parser = Mock()
 
         # Call method under test
-        self.plugin._generate_rules(pod)
+        self.plugin._generate_rules(pod, self.expected_profile_name)
 
         # Assert
         calls = [call("allow from label A=B"),
@@ -1022,10 +1038,9 @@ class NetworkPluginTest(unittest.TestCase):
         pod = {
             'metadata': {'namespace': 'a', 'labels': {1: 2, "2/3": "4_5"}}}
         self.plugin.namespace = pod['metadata']['namespace']
-        self.plugin.profile_name = 'profile_name'
 
         # Set up mock objs
-        m_profile = Mock(spec=Profile, name=self.plugin.profile_name)
+        m_profile = Mock(spec=Profile, name=self.expected_profile_name)
         m_profile.tags = set()
         self.m_datastore_client.get_profile.return_value = m_profile
 
@@ -1035,11 +1050,11 @@ class NetworkPluginTest(unittest.TestCase):
         check_tags.add('a_2_3_4__5')
 
         # Call method under test
-        self.plugin._apply_tags(pod)
+        self.plugin._apply_tags(pod, self.expected_profile_name)
 
         # Assert
         self.m_datastore_client.get_profile.assert_called_once_with(
-            self.plugin.profile_name)
+            self.expected_profile_name)
         self.m_datastore_client.profile_update_tags.assert_called_once_with(
             m_profile)
         assert_equal(m_profile.tags, check_tags)
@@ -1047,12 +1062,11 @@ class NetworkPluginTest(unittest.TestCase):
     def test_apply_tags_no_labels(self):
         # Intialize args
         pod = {}
-        self.plugin.profile_name = 'profile_name'
         self.plugin.namespace = 'ns'
         self.m_datastore_client.get_profile.return_value = Mock()
 
         # Call method under test
-        self.plugin._apply_tags(pod)
+        self.plugin._apply_tags(pod, self.expected_profile_name)
 
         # Assert
         assert_false(self.m_datastore_client.called)
@@ -1066,7 +1080,7 @@ class NetworkPluginTest(unittest.TestCase):
         self.m_datastore_client.get_profile.side_effect = KeyError
 
         # Call method under test expecting sys exit
-        assert_raises(SystemExit, self.plugin._apply_tags, pod)
+        assert_raises(SystemExit, self.plugin._apply_tags, pod, self.expected_profile_name)
 
     @parameterized.expand([(1234,), ('testNAMESPACE',)])
     def test_log_interfaces(self, ns):
@@ -1273,7 +1287,7 @@ class NetworkPluginTest(unittest.TestCase):
             ETCD_AUTHORITY_VAR: "etcd-auth",
             KUBE_AUTH_TOKEN_VAR: "kube-auth",
             KUBE_API_ROOT_VAR: "kube-api",
-            DEFAULT_POLICY_VAR: "default-policy",
+            DEFAULT_POLICY_VAR: "none",
             CALICO_IPAM_VAR: "calico-ipam",
             LOG_LEVEL_VAR: "log-level",
         }
@@ -1307,17 +1321,27 @@ class NetworkPluginTest(unittest.TestCase):
         m_read_file.return_value = file_resp
         m_os.environ.get.side_effect = lambda x,y: x
 
+        # Mock out reading from environment.
+        get_dict = {
+            ETCD_AUTHORITY_VAR: "etcd",
+            KUBE_AUTH_TOKEN_VAR: "auth",
+            KUBE_API_ROOT_VAR: "api",
+            DEFAULT_POLICY_VAR: "none",
+            CALICO_IPAM_VAR: "ipam",
+            LOG_LEVEL_VAR: "DEBUG",
+        }
+        m_os.environ.get.side_effect = lambda x,y : get_dict.get(x,y)
         # Call method
         config = calico_kubernetes.load_config()
 
         # The response should equal the file config.
         expected_resp = {
-            ETCD_AUTHORITY_VAR: ETCD_AUTHORITY_VAR,
-            KUBE_AUTH_TOKEN_VAR: KUBE_AUTH_TOKEN_VAR,
-            KUBE_API_ROOT_VAR: KUBE_API_ROOT_VAR,
-            DEFAULT_POLICY_VAR: DEFAULT_POLICY_VAR,
-            CALICO_IPAM_VAR: CALICO_IPAM_VAR,
-            LOG_LEVEL_VAR: LOG_LEVEL_VAR,
+            ETCD_AUTHORITY_VAR: "etcd",
+            KUBE_AUTH_TOKEN_VAR: "auth",
+            KUBE_API_ROOT_VAR: "api",
+            DEFAULT_POLICY_VAR: "none",
+            CALICO_IPAM_VAR: "ipam",
+            LOG_LEVEL_VAR: "DEBUG",
         }
         assert_equal(config, expected_resp)
 
@@ -1381,3 +1405,13 @@ class NetworkPluginTest(unittest.TestCase):
 
         # Call method under test
         assert_equal(defaults, calico_kubernetes.read_config_file())
+
+    def test_validate_config(self):
+        """
+        Tests validation of config dictionary.
+        """
+        config = {
+            DEFAULT_POLICY_VAR: "invalidvalue",
+        }
+
+        assert_raises(SystemExit, calico_kubernetes.validate_config, config)

@@ -52,7 +52,11 @@ HOSTNAME = socket.gethostname()
 # Config filename.
 CONFIG_FILENAME = "calico_kubernetes.ini"
 
+# Key to use when searching for annotations.
 POLICY_ANNOTATION_KEY = "projectcalico.org/policy"
+
+# Name of the profile to apply when using DEFAULT_POLICY == none.
+DEFAULT_PROFILE_NAME = "default-profile"
 
 # Values in configuration dictionary.
 ETCD_AUTHORITY_VAR = "ETCD_AUTHORITY"
@@ -70,12 +74,17 @@ ENVIRONMENT_VARS = [ETCD_AUTHORITY_VAR,
                     CALICO_IPAM_VAR,
                     DEFAULT_POLICY_VAR]
 
+# Valid values for DEFAULT_POLICY
+POLICY_NS_ISOLATION = "ns_isolation"
+POLICY_ALLOW = "allow"
+POLICY_NONE = "none"
+ALL_POLICIES = [POLICY_NS_ISOLATION, POLICY_ALLOW, POLICY_NONE]
+
 
 class NetworkPlugin(object):
 
     def __init__(self, config):
         self.pod_name = None
-        self.profile_name = None
         self.namespace = None
         self.docker_id = None
         self.policy_parser = None
@@ -98,9 +107,6 @@ class NetworkPlugin(object):
         self.docker_id = docker_id
         self.namespace = namespace
         self.policy_parser = PolicyParser(self.namespace)
-        self.profile_name = "%s_%s_%s" % (self.namespace,
-                                          self.pod_name,
-                                          str(self.docker_id)[:12])
         logger.info('Configuring pod %s/%s (container_id %s)',
                     self.namespace, self.pod_name, self.docker_id)
 
@@ -120,26 +126,62 @@ class NetworkPlugin(object):
         self.pod_name = pod_name
         self.docker_id = docker_id
         self.namespace = namespace
-        self.profile_name = "%s_%s_%s" % (self.namespace,
-                                          self.pod_name,
-                                          str(self.docker_id)[:12])
-
         logger.info('Removing networking from pod %s/%s (container id %s)',
                     self.namespace, self.pod_name, self.docker_id)
 
-        # Remove the profile for the workload.
-        self._container_remove()
+        # Get the Calico endpoint.
+        endpoint = self._get_endpoint()
+        if not endpoint:
+            # If there is no endpoint, we don't have any work to do - return.
+            logger.debug("No Calico endpoint for pod, no work to do.")
+            sys.exit(0)
+        logger.debug("Pod has Calico endpoint %s", endpoint.endpoint_id)
 
-        # Delete profile
-        try:
-            logger.info("Deleting Calico profile: %s", self.profile_name)
-            self._datastore_client.remove_profile(self.profile_name)
-        except:
-            logger.warning("Cannot remove profile %s; Profile cannot "
-                           "be found.", self.profile_name)
+        # Remove the container.
+        self._container_remove(endpoint)
+
+        # If the pod has any profiles, delete them unless they are the 
+        # default profile or have other members.  We can do this because 
+        # we create a profile per pod. Profile management for namespaces
+        # and service based policy will need to be done differently.
+        logger.debug("Endpoint has profiles: %s", endpoint.profile_ids)
+        for profile_id in endpoint.profile_ids:
+            if profile_id == DEFAULT_PROFILE_NAME:
+                logger.debug("Do not delete default profile")
+                continue
+
+            if self._datastore_client.get_profile_members(profile_id):
+                logger.info("Profile %s still has members, do not delete", 
+                            profile_id)
+                continue
+
+            try:
+                logger.info("Deleting Calico profile: %s", profile_id)
+                self._datastore_client.remove_profile(profile_id)
+            except KeyError:
+                logger.warning("Cannot remove profile %s; Profile cannot "
+                               "be found.", profile_id)
         logger.info("Successfully removed networking for pod %s/%s",
                     self.namespace, self.pod_name)
 
+    def _get_endpoint(self):
+        """
+        Attempts to get and return the Calico endpoint for this pod.  If no
+        endpoint exists, returns None.
+        """
+        logger.debug("Looking up endpoint for workload %s", self.docker_id)
+        try:
+            endpoint = self._datastore_client.get_endpoint(
+                hostname=HOSTNAME,
+                orchestrator_id=ORCHESTRATOR_ID,
+                workload_id=self.docker_id
+            )
+        except KeyError:
+            logger.debug("No Calico endpoint exists for pod %s/%s",
+                         self.namespace, self.pod_name)
+            endpoint = None
+        return endpoint
+ 
     def status(self, namespace, pod_name, docker_id):
         self.namespace = namespace
         self.pod_name = pod_name
@@ -153,16 +195,11 @@ class NetworkPlugin(object):
                          self.namespace, self.pod_name)
             sys.exit(0)
 
-        # Find the endpoint
-        try:
-            endpoint = self._datastore_client.get_endpoint(
-                hostname=HOSTNAME,
-                orchestrator_id=ORCHESTRATOR_ID,
-                workload_id=self.docker_id
-            )
-        except KeyError:
-            logger.error("Error in status: No endpoint for pod: %s/%s",
-                         self.namespace, self.pod_name)
+        # Get the endpoint.
+        endpoint = self._get_endpoint()
+        if not endpoint:
+            # If the endpoint doesn't exist, we cannot provide a status.
+            logger.debug("No endpoint for pod - cannot provide status")
             sys.exit(1)
 
         # Retrieve IPAddress from the attached IPNetworks on the endpoint
@@ -192,29 +229,63 @@ class NetworkPlugin(object):
     def _configure_profile(self, endpoint):
         """
         Configure the calico profile on the given endpoint.
+
+        If DEFAULT_POLICY != none, we create a new profile for this pod and populate it 
+        with the correct rules.
+
+        Otherwise, the pod gets assigned to the default profile.
         """
-        pod = self._get_pod_config()
+        if self.default_policy != POLICY_NONE:
+            # Determine the name for this profile.
+            profile_name = "%s_%s_%s" % (self.namespace, 
+                                         self.pod_name, 
+                                         str(self.docker_id)[:12])
 
-        logger.info('Configuring Pod Profile: %s', self.profile_name)
+            # Create a new profile for this pod.
+            logger.info("Creating profile '%s'", profile_name)
 
-        if self._datastore_client.profile_exists(self.profile_name):
-            logger.error("Profile with name %s already exists, exiting.",
-                         self.profile_name)
-            sys.exit(1)
+            #  Retrieve pod labels, etc.
+            pod = self._get_pod_config()
+    
+            if self._datastore_client.profile_exists(profile_name):
+                # In profile-per-pod, we don't ever expect duplicate profiles.
+                logger.error("Profile '%s' already exists.", profile_name)
+                sys.exit(1)
+            else:
+                # The profile doesn't exist - generate the rule set for this 
+                # profile, and create it.
+                rules = self._generate_rules(pod, profile_name)
+                self._datastore_client.create_profile(profile_name, rules)
+    
+            # Add tags to the profile based on labels.
+            self._apply_tags(pod, profile_name)
+    
+            # Set the profile for the workload.
+            logger.info("Setting profile '%s' on endpoint %s",
+                        profile_name, endpoint.endpoint_id)
+            self._datastore_client.set_profiles_on_endpoint(
+                [profile_name], endpoint_id=endpoint.endpoint_id
+            )
+            logger.debug('Finished configuring profile.')
         else:
-            rules = self._generate_rules(pod)
-            self._datastore_client.create_profile(self.profile_name, rules)
+            # Policy is disabled - add this pod to the default profile.
+            if not self._datastore_client.profile_exists(DEFAULT_PROFILE_NAME):
+                # If the default profile doesn't exist, create it.
+                logger.info("Creating profile '%s'", DEFAULT_PROFILE_NAME)
+                allow = Rule(action="allow")
+                rules = Rules(id=DEFAULT_PROFILE_NAME, 
+                              inbound_rules=[allow], 
+                              outbound_rules=[allow])
+                self._datastore_client.create_profile(DEFAULT_PROFILE_NAME, 
+                                                      rules)
 
-        # Add tags to the profile.
-        self._apply_tags(pod)
-
-        # Set the profile for the workload.
-        logger.info('Setting profile %s on endpoint %s',
-                    self.profile_name, endpoint.endpoint_id)
-        self._datastore_client.set_profiles_on_endpoint(
-            [self.profile_name], endpoint_id=endpoint.endpoint_id
-        )
-        logger.debug('Finished configuring profile.')
+            # Set the default profile on this pod's Calico endpoint.
+            logger.info("Setting profile '%s' on endpoint %s", 
+                        DEFAULT_PROFILE_NAME, endpoint.endpoint_id)
+            self._datastore_client.set_profiles_on_endpoint(
+                [DEFAULT_PROFILE_NAME], 
+                endpoint_id=endpoint.endpoint_id
+            )
 
     def _configure_interface(self):
         """Configure the Calico interface for a pod.
@@ -265,16 +336,7 @@ class NetworkPlugin(object):
         Add a container (on this host) to Calico networking with the given IP.
         """
         # Check if the container already exists. If it does, exit.
-        try:
-            _ = self._datastore_client.get_endpoint(
-                hostname=HOSTNAME,
-                orchestrator_id=ORCHESTRATOR_ID,
-                workload_id=self.docker_id
-            )
-        except KeyError:
-            # Calico doesn't know about this container.  Continue.
-            pass
-        else:
+        if self._get_endpoint():
             logger.error("This container has already been configured "
                          "with Calico Networking.")
             sys.exit(1)
@@ -286,7 +348,7 @@ class NetworkPlugin(object):
 
         # Create Endpoint object
         try:
-            logger.info("Creating endpoint with IPs %s", ip_list)
+            logger.info("Creating Calico endpoint with IPs %s", ip_list)
             ep = self._datastore_client.create_endpoint(HOSTNAME,
                                                         ORCHESTRATOR_ID,
                                                         self.docker_id,
@@ -379,22 +441,10 @@ class NetworkPlugin(object):
                 _assign(ip)
         return ip
 
-    def _container_remove(self):
+    def _container_remove(self, endpoint):
         """
         Remove the indicated container on this host from Calico networking
         """
-        # Find the endpoint ID. We need this to find any ACL rules
-        try:
-            endpoint = self._datastore_client.get_endpoint(
-                hostname=HOSTNAME,
-                orchestrator_id=ORCHESTRATOR_ID,
-                workload_id=self.docker_id
-            )
-        except KeyError:
-            logger.exception("Container %s doesn't contain any endpoints",
-                             self.docker_id)
-            sys.exit(1)
-
         # Remove any IP address assignments that this endpoint has
         ip_set = set()
         for net in endpoint.ipv4_nets | endpoint.ipv6_nets:
@@ -578,12 +628,12 @@ class NetworkPlugin(object):
                          KUBE_API_ROOT_VAR, self.api_root)
             sys.exit(1)
 
-    def _generate_rules(self, pod):
+    def _generate_rules(self, pod, profile_name):
         """
         Generate Rules takes human readable policy strings in annotations
         and returns a libcalico Rules object.
 
-        :return tuple of inbound_rules, outbound_rules
+        :return Pycalico Rules object. 
         """
         # Create allow and per-namespace rules for later use.
         allow = Rule(action="allow")
@@ -609,22 +659,22 @@ class NetworkPlugin(object):
         else:
             # If not annotations are defined, just use the configured
             # default policy.
-            if self.default_policy == 'ns_isolation':
+            if self.default_policy == POLICY_NS_ISOLATION:
                 # Isolate on namespace boundaries by default.
                 logger.debug("Default policy is namespace isolation")
                 inbound_rules = [allow_ns]
                 outbound_rules = [allow]
-            else:
+            elif self.default_policy == POLICY_ALLOW:
                 # Allow all traffic by default.
                 logger.debug("Default policy is allow all")
                 inbound_rules = [allow]
                 outbound_rules = [allow]
 
-        return Rules(id=self.profile_name,
+        return Rules(id=profile_name,
                      inbound_rules=inbound_rules,
                      outbound_rules=outbound_rules)
 
-    def _apply_tags(self, pod):
+    def _apply_tags(self, pod, profile_name):
         """
         In addition to Calico's default pod_name tag,
         Add tags generated from Kubernetes Labels and Namespace
@@ -632,24 +682,24 @@ class NetworkPlugin(object):
         Add tag for namespace
             Ex. namespace: default -> tags+= namespace_default
 
-        :param self.profile_name: The name of the Calico profile.
-        :type self.profile_name: string
+        :param profile_name: The name of the Calico profile.
+        :type profile_name: string
         :param pod: The config dictionary for the pod being created.
         :type pod: dict
         :return:
         """
-        logger.debug('Applying tags')
+        logger.debug("Applying tags to profile '%s'", profile_name)
 
         try:
-            profile = self._datastore_client.get_profile(self.profile_name)
+            profile = self._datastore_client.get_profile(profile_name)
         except KeyError:
             logger.error('Could not apply tags. Profile %s could not be '
-                         'found. Exiting', self.profile_name)
+                         'found. Exiting', profile_name)
             sys.exit(1)
 
         # Grab namespace and create a tag if it exists.
         ns_tag = self._get_namespace_tag(pod)
-        logger.debug('Adding tag %s', ns_tag)
+        logger.debug('Generated tag: %s', ns_tag)
         profile.tags.add(ns_tag)
 
         # Create tags from labels
@@ -657,9 +707,10 @@ class NetworkPlugin(object):
         if labels:
             for k, v in labels.iteritems():
                 tag = self._label_to_tag(k, v)
-                logger.debug('Adding tag %s', tag)
+                logger.debug('Generated tag: %s', tag)
                 profile.tags.add(tag)
 
+        # Apply tags to profile.
         self._datastore_client.profile_update_tags(profile)
         logger.debug('Finished applying tags.')
 
@@ -719,6 +770,7 @@ class NetworkPlugin(object):
         tag = self._escape_chars(tag)
         return tag
 
+
 def _log_interfaces(namespace):
     """
     Log interface state in namespace and default namespace.
@@ -744,6 +796,18 @@ def _log_interfaces(namespace):
         logger.exception("Ignoring error logging interfaces")
 
 
+def validate_config(config):
+    """
+    Validates the given configuration dictionary and exits 
+    if an error is found.
+    """
+    if not config[DEFAULT_POLICY_VAR] in ALL_POLICIES:
+        err = "Invalid value %s=%s, must be one of %s"
+        sys.exit(err % (DEFAULT_POLICY_VAR, 
+                        config[DEFAULT_POLICY_VAR], 
+                        ALL_POLICIES))
+
+
 def load_config():
     """
     Loads configuration for the plugin - returns a dictionary.
@@ -767,6 +831,10 @@ def load_config():
 
     # Ensure case is correct.
     config[LOG_LEVEL_VAR] = config[LOG_LEVEL_VAR].upper()
+
+    # Validate the config before returning it.  This will exit
+    # and emit an error if any of the configuration is wrong.
+    validate_config(config)
 
     return config
 
