@@ -55,10 +55,6 @@ ETCD_AUTHORITY_ENV = "ETCD_AUTHORITY"
 if ETCD_AUTHORITY_ENV not in os.environ:
     os.environ[ETCD_AUTHORITY_ENV] = 'kubernetes-master:6666'
 
-# Get the desired calicoctl location.  By default, we search the PATH for
-# the location of calicoctl, unless overridden by this variable.
-CALICOCTL_PATH = os.environ.get('CALICOCTL_PATH', 'calicoctl')
-
 KUBE_API_ROOT = os.environ.get('KUBE_API_ROOT',
                                'http://kubernetes-master:8080/api/v1/')
 
@@ -66,9 +62,9 @@ KUBE_API_ROOT = os.environ.get('KUBE_API_ROOT',
 DEFAULT_POLICY = os.environ.get('DEFAULT_POLICY', 'allow')
 
 # Flag to indicate whether or not to use Calico IPAM.
-# If False, use the default docker container ip address to create container.
-# If True, use libcalico's auto_assign IPAM to create container.
-CALICO_IPAM = os.environ.get('CALICO_IPAM', 'false')
+# If "false", use the default docker container ip address to create container.
+# If "true", use libcalico's auto_assign IPAM to create container.
+CALICO_IPAM = os.environ.get('CALICO_IPAM', 'true').lower()
 
 
 class NetworkPlugin(object):
