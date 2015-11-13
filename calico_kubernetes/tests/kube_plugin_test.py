@@ -1309,5 +1309,15 @@ class NetworkPluginTest(unittest.TestCase):
         # Mock
         m_os.path.isfile.return_value = False
 
+        # Defaults
+        defaults = {
+            ETCD_AUTHORITY_VAR: "127.0.0.1:2379",
+            CALICO_IPAM_VAR: "true",
+            KUBE_API_ROOT_VAR: "http://kubernetes-master:8080/api/v1",
+            DEFAULT_POLICY_VAR: "allow",
+            KUBE_AUTH_TOKEN_VAR: None,
+            LOG_LEVEL_VAR: "INFO",
+        }
+
         # Call method under test
-        assert_raises(SystemExit, calico_kubernetes.read_config_file)
+        assert_equal(defaults, calico_kubernetes.read_config_file())

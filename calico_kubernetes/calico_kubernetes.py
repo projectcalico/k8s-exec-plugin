@@ -768,10 +768,6 @@ def read_config_file():
     cur_dir = os.path.dirname(executable)
     config_file = os.path.join(cur_dir, CONFIG_FILENAME)
 
-    # Check that the file exists.
-    if not os.path.isfile(config_file):
-        sys.exit("Cannot find configuration file: %s" % config_file)
-
     # Create dictionary of default values.
     defaults = {
         ETCD_AUTHORITY_VAR: "127.0.0.1:2379",
@@ -782,6 +778,10 @@ def read_config_file():
         LOG_LEVEL_VAR: "INFO",
     }
     config = {}
+
+    # Check that the file exists.  If not, return default values.
+    if not os.path.isfile(config_file):
+        return defaults
 
     # Read the config file.
     parser = ConfigParser.ConfigParser(defaults)
