@@ -1181,17 +1181,13 @@ class NetworkPluginTest(unittest.TestCase):
         else:
             assert_false(m_plugin.called)
 
-    @parameterized.expand([
-        (True,),
-        (False,),
-    ])
     @patch('os.path', autospec=True)
     @patch('os.makedirs', autospec=True)
     @patch('calico_kubernetes.logutils.ConcurrentRotatingFileHandler',
            autospec=True)
     @patch('logging.StreamHandler', autospec=True)
     @patch('logging.Formatter', autospec=True)
-    def test_configure_logger(self, m_log_to_stdout, m_logging_f, m_logging_sh,
+    def test_configure_logger(self, m_logging_f, m_logging_sh,
                               m_logging_fh, m_os_makedirs, m_os_path):
         """Test configure_logger
 
@@ -1208,7 +1204,6 @@ class NetworkPluginTest(unittest.TestCase):
                                   log_level=logging.DEBUG,
                                   docker_id="abcd1234",
                                   log_format="FORMAT",
-                                  log_to_stdout=m_log_to_stdout,
                                   log_dir='/mock/')
 
         m_os_makedirs.assert_called_once_with('/mock/')
@@ -1219,11 +1214,8 @@ class NetworkPluginTest(unittest.TestCase):
         m_log.setLevel.assert_called_once_with(logging.DEBUG)
 
         # Test stdout config calls.
-        if m_log_to_stdout:
-            m_log.addHandler.assert_has_calls([call(f_handler),
-                                               call(s_handler)])
-        else:
-            m_log.addHandler.assert_called_once_with(f_handler)
+        m_log.addHandler.assert_has_calls([call(f_handler), 
+                                           call(s_handler)])
 
     def test_filter(self):
         """Test filter method for IdentityFilterClass"""

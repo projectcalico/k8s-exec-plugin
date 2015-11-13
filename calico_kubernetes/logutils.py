@@ -12,20 +12,19 @@ DOCKER_ID_LOG_FORMAT = '%(asctime)s %(process)d [%(identity)s] %(levelname)s %(f
 
 
 def configure_logger(logger, log_level, docker_id=None, log_format=LOG_FORMAT,
-                     log_to_stdout=True, log_dir=LOG_DIR):
+                     log_dir=LOG_DIR):
     """
     Configures logging to the file 'calico.log' in the specified log directory
 
     If the logs are not coming from calico_kubernetes.py, format the log to
      include the filename of origin
 
-    Additionally configures a stdout handler which logs INFO and
-    above to stdout.
+    Additionally configures a stderr handler which logs INFO and
+    above to stderr.
 
     :param logger: logger object to configure
     :param log_level: level at which logger starts logging.
     :param log_format: Indicates which logging scheme to use.
-    :param log_to_stdout: If True, configure the stdout stream handler.
     :param log_dir: Directory where calico.log lives. If None set to default
     :return:
     """
@@ -42,17 +41,17 @@ def configure_logger(logger, log_level, docker_id=None, log_format=LOG_FORMAT,
     if docker_id:
         file_hdlr.addFilter(docker_filter)
 
+    # Add file handler and set log level.
     logger.addHandler(file_hdlr)
     logger.setLevel(log_level)
 
-    # Create an stdout handler and apply it to the logger
-    if log_to_stdout:
-        stdout_hdlr = logging.StreamHandler(sys.stdout)
-        stdout_hdlr.setLevel(log_level)
-        stdout_hdlr.setFormatter(formatter)
-        if docker_id:
-            stdout_hdlr.addFilter(docker_filter)
-        logger.addHandler(stdout_hdlr)
+    # Create a stderr handler and apply it to the logger.
+    # This only logs INFO and above to stderr.
+    stderr_hdlr = logging.StreamHandler(sys.stderr)
+    stderr_hdlr.setLevel(logging.INFO)
+    stderr_hdlr.setFormatter(formatter)
+    logger.addHandler(stderr_hdlr)
+
 
 class IdentityFilter(logging.Filter):
     """
