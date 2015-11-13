@@ -23,6 +23,7 @@ import logging
 import sys
 import json
 import socket
+import ConfigParser
 
 from docker import Client
 from docker.errors import APIError
@@ -43,39 +44,48 @@ from logutils import *
 
 pycalico_logger = logging.getLogger(pycalico.__name__)
 logger = logging.getLogger(__name__)
-LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO').upper()
 
 DOCKER_VERSION = "1.16"
 ORCHESTRATOR_ID = "docker"
 HOSTNAME = socket.gethostname()
 
+# Config filename.
+CONFIG_FILENAME = "calico_kubernetes.ini"
+
 POLICY_ANNOTATION_KEY = "projectcalico.org/policy"
 
-ETCD_AUTHORITY_ENV = "ETCD_AUTHORITY"
-if ETCD_AUTHORITY_ENV not in os.environ:
-    os.environ[ETCD_AUTHORITY_ENV] = 'kubernetes-master:6666'
+# Values in configuration dictionary.
+ETCD_AUTHORITY_VAR = "ETCD_AUTHORITY"
+LOG_LEVEL_VAR = "LOG_LEVEL"
+KUBE_AUTH_TOKEN_VAR = "KUBE_AUTH_TOKEN"
+KUBE_API_ROOT_VAR = "KUBE_API_ROOT"
+CALICO_IPAM_VAR = "CALICO_IPAM"
+DEFAULT_POLICY_VAR = "DEFAULT_POLICY"
 
-KUBE_API_ROOT = os.environ.get('KUBE_API_ROOT',
-                               'http://kubernetes-master:8080/api/v1/')
-
-# Allow the user to enable/disable namespace isolation policy
-DEFAULT_POLICY = os.environ.get('DEFAULT_POLICY', 'allow')
-
-# Flag to indicate whether or not to use Calico IPAM.
-# If "false", use the default docker container ip address to create container.
-# If "true", use libcalico's auto_assign IPAM to create container.
-CALICO_IPAM = os.environ.get('CALICO_IPAM', 'true').lower()
+# All environment variables used by the plugin.
+ENVIRONMENT_VARS = [ETCD_AUTHORITY_VAR,
+                    LOG_LEVEL_VAR,
+                    KUBE_AUTH_TOKEN_VAR,
+                    KUBE_API_ROOT_VAR,
+                    CALICO_IPAM_VAR,
+                    DEFAULT_POLICY_VAR]
 
 
 class NetworkPlugin(object):
 
-    def __init__(self):
+    def __init__(self, config):
         self.pod_name = None
         self.profile_name = None
         self.namespace = None
         self.docker_id = None
-        self.auth_token = os.environ.get('KUBE_AUTH_TOKEN', None)
         self.policy_parser = None
+
+        # Get configuration from the given dictionary.
+        logger.debug("Plugin running with config: %s", config)
+        self.auth_token = config[KUBE_AUTH_TOKEN_VAR]
+        self.api_root = config[KUBE_API_ROOT_VAR]
+        self.calico_ipam = config[CALICO_IPAM_VAR].lower()
+        self.default_policy = config[DEFAULT_POLICY_VAR].lower()
 
         self._datastore_client = IPAMClient()
         self._docker_client = Client(
@@ -290,8 +300,6 @@ class NetworkPlugin(object):
         Assign IPAddress either with the assigned docker IPAddress or utilize
         calico IPAM.
 
-        The option to utilize IPAM is indicated by the environment variable
-        "CALICO_IPAM".
         True indicates to utilize Calico's auto_assign IPAM policy.
         False indicate to utilize the docker assigned IPAddress
 
@@ -309,7 +317,7 @@ class NetworkPlugin(object):
                 logger.exception("Failed to assign IPAddress %s", ip)
                 sys.exit(1)
 
-        if CALICO_IPAM == 'true':
+        if self.calico_ipam == 'true':
             logger.info("Using Calico IPAM")
             try:
                 ipv4s, ipv6s = self._datastore_client.auto_assign_ips(1, 0,
@@ -526,13 +534,12 @@ class NetworkPlugin(object):
         :return: A list of JSON API objects
         :rtype list
         """
-        logger.info('Getting API Resource: %s from KUBE_API_ROOT: %s',
-                    path, KUBE_API_ROOT)
+        logger.info('Getting API Resource: %s%s', self.api_root, path)
         session = requests.Session()
         if self.auth_token:
             session.headers.update({'Authorization':
                                     'Bearer ' + self.auth_token})
-        response = session.get(KUBE_API_ROOT + path, verify=False)
+        response = session.get(self.api_root + path, verify=False)
         response_body = response.text
 
         # The response body contains some metadata, and the pods themselves
@@ -541,19 +548,19 @@ class NetworkPlugin(object):
 
     def _api_root_secure(self):
         """
-        Checks whether the KUBE_API_ROOT is secure or insecure.
+        Checks whether the Kubernetes api root is secure or insecure.
         If not an http or https address, exit.
 
         :return: Boolean: True if secure. False if insecure
         """
-        if (KUBE_API_ROOT[:5] == 'https'):
+        if (self.api_root[:5] == 'https'):
             return True
-        elif (KUBE_API_ROOT[:5] == 'http:'):
+        elif (self.api_root[:5] == 'http:'):
             return False
         else:
-            logger.error('KUBE_API_ROOT is not set correctly (%s). '
+            logger.error('%s is not set correctly (%s). '
                          'Please specify as http or https address. Exiting',
-                         KUBE_API_ROOT)
+                         KUBE_API_ROOT_VAR, self.api_root)
             sys.exit(1)
 
     def _generate_rules(self, pod):
@@ -587,7 +594,7 @@ class NetworkPlugin(object):
         else:
             # If not annotations are defined, just use the configured
             # default policy.
-            if DEFAULT_POLICY == 'ns_isolation':
+            if self.default_policy == 'ns_isolation':
                 # Isolate on namespace boundaries by default.
                 logger.debug("Default policy is namespace isolation")
                 inbound_rules = [allow_ns]
@@ -724,6 +731,73 @@ def _log_interfaces(namespace):
         # Don't exit if we hit an error logging out the interfaces.
         logger.exception("Ignoring error logging interfaces")
 
+
+def load_config():
+    """
+    Loads configuration for the plugin - returns a dictionary.
+
+    Looks first in environment, then in local config file.
+    """
+    # First, read the config file and get defaults.
+    config = read_config_file()
+
+    # Get config from environment, if defined.
+    for var in ENVIRONMENT_VARS:
+        config[var] = os.environ.get(var, config[var])
+
+    # ETCD_AUTHORITY is handled slightly differently - we need to set it in the
+    # environment so that libcalico works correctly.
+    if not ETCD_AUTHORITY_VAR in os.environ:
+        logger.debug("Use env variable: %s=%s",
+                     ETCD_AUTHORITY_VAR,
+                     config[ETCD_AUTHORITY_VAR])
+        os.environ[ETCD_AUTHORITY_VAR] = config[ETCD_AUTHORITY_VAR]
+
+    # Ensure case is correct.
+    config[LOG_LEVEL_VAR] = config[LOG_LEVEL_VAR].upper()
+
+    return config
+
+
+def read_config_file():
+    """
+    Reads the config file on disk and returns configuration dictionary.
+    """
+    # Get the current directory and find path to config file.
+    executable = sys.argv[0]
+    cur_dir = os.path.dirname(executable)
+    config_file = os.path.join(cur_dir, CONFIG_FILENAME)
+
+    # Create dictionary of default values.
+    defaults = {
+        ETCD_AUTHORITY_VAR: "127.0.0.1:2379",
+        CALICO_IPAM_VAR: "true",
+        KUBE_API_ROOT_VAR: "http://kubernetes-master:8080/api/v1",
+        DEFAULT_POLICY_VAR: "allow",
+        KUBE_AUTH_TOKEN_VAR: None,
+        LOG_LEVEL_VAR: "INFO",
+    }
+    config = {}
+
+    # Check that the file exists.  If not, return default values.
+    if not os.path.isfile(config_file):
+        return defaults
+
+    # Read the config file.
+    parser = ConfigParser.ConfigParser(defaults)
+    parser.read(config_file)
+
+    # Make sure the config section exists
+    if not "config" in parser.sections():
+        sys.exit("No [config] section in file %s" % config_file)
+
+    # Get any values from the configuration file and populate dictionary.
+    for var in ENVIRONMENT_VARS:
+        config[var] = parser.get("config", var)
+
+    return config
+
+
 def run_protected():
     """
     Runs the plugin, intercepting all exceptions.
@@ -735,6 +809,9 @@ def run_protected():
     pod_name = sys.argv[3].replace('/', '_') if len(sys.argv) >=4 else None
     docker_id = sys.argv[4] if len(sys.argv) >=5 else None
 
+    # Get config from file / environment.
+    config = load_config()
+
     # Append a stdout logging handler to log to the Kubelet.
     # We cannot do this in the status hook because the Kubelet looks to
     # stdout for status results.
@@ -744,11 +821,11 @@ def run_protected():
     # If docker_id is not supplied, do not include it in logger config.
     if docker_id:
         configure_logger(logger=logger,
-                         log_level=LOG_LEVEL,
+                         log_level=config[LOG_LEVEL_VAR],
                          log_format=DOCKER_ID_ROOT_LOG_FORMAT,
                          log_to_stdout=log_to_stdout)
         configure_logger(logger=pycalico_logger,
-                         log_level=LOG_LEVEL,
+                         log_level=config[LOG_LEVEL_VAR],
                          log_format=DOCKER_ID_LOG_FORMAT,
                          log_to_stdout=log_to_stdout)
 
@@ -757,11 +834,11 @@ def run_protected():
         pycalico_logger.addFilter(docker_filter)
     else:
         configure_logger(logger=logger,
-                         log_level=LOG_LEVEL,
+                         log_level=config[LOG_LEVEL_VAR],
                          log_format=ROOT_LOG_FORMAT,
                          log_to_stdout=log_to_stdout)
         configure_logger(logger=pycalico_logger,
-                         log_level=LOG_LEVEL,
+                         log_level=config[LOG_LEVEL_VAR],
                          log_format=LOG_FORMAT,
                          log_to_stdout=log_to_stdout)
 
@@ -773,7 +850,8 @@ def run_protected():
         run(mode=mode,
             namespace=namespace,
             pod_name=pod_name,
-            docker_id=docker_id)
+            docker_id=docker_id,
+            config=config)
     except SystemExit:
         # If a SystemExit is thrown, we've already handled the error and have
         # called sys.exit().  No need to produce a duplicate exception
@@ -788,28 +866,21 @@ def run_protected():
         logger.info("Calico network plugin execution complete")
         sys.exit(rc)
 
-def run(mode, namespace, pod_name, docker_id):
+
+def run(mode, namespace, pod_name, docker_id, config):
     if mode == 'init':
         logger.info('No initialization work to perform')
-    elif mode == "status":
-        # Status is called on a regular basis - handle separately
-        # to avoid flooding the logs.
-        logger.info('Executing Calico pod-status hook')
-        NetworkPlugin().status(namespace, pod_name, docker_id)
     else:
-        logger.info("Using LOG_LEVEL=%s", LOG_LEVEL)
-        logger.info("Using ETCD_AUTHORITY=%s",
-                    os.environ[ETCD_AUTHORITY_ENV])
-        logger.info("Using KUBE_API_ROOT=%s", KUBE_API_ROOT)
-        logger.info("Using CALICO_IPAM=%s", CALICO_IPAM)
-        logger.info("Using DEFAULT_POLICY=%s", DEFAULT_POLICY)
-
+        # Create the plugin instance, passing in config.
         if mode == 'setup':
             logger.info('Executing Calico pod-creation hook')
-            NetworkPlugin().create(namespace, pod_name, docker_id)
+            NetworkPlugin(config).create(namespace, pod_name, docker_id)
         elif mode == 'teardown':
             logger.info('Executing Calico pod-deletion hook')
-            NetworkPlugin().delete(namespace, pod_name, docker_id)
+            NetworkPlugin(config).delete(namespace, pod_name, docker_id)
+        elif mode == "status":
+            logger.debug('Executing Calico pod-status hook')
+            NetworkPlugin(config).status(namespace, pod_name, docker_id)
 
 
 if __name__ == '__main__':  # pragma: no cover

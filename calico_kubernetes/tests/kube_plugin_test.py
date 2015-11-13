@@ -16,6 +16,7 @@ import sys
 import json
 import logging
 import unittest
+import copy
 
 from docker.errors import APIError
 from mock import patch, Mock, MagicMock, call
@@ -31,6 +32,12 @@ from pycalico.datastore_datatypes import Profile, Endpoint
 
 # noinspection PyProtectedMember
 from calico_kubernetes.calico_kubernetes import _log_interfaces, POLICY_ANNOTATION_KEY
+from calico_kubernetes.calico_kubernetes import (KUBE_API_ROOT_VAR,
+                                                 CALICO_IPAM_VAR,
+                                                 KUBE_AUTH_TOKEN_VAR,
+                                                 ETCD_AUTHORITY_VAR,
+                                                 LOG_LEVEL_VAR,
+                                                 DEFAULT_POLICY_VAR)
 from calico_kubernetes.logutils import ROOT_LOG_FORMAT, LOG_FORMAT, DOCKER_ID_ROOT_LOG_FORMAT, DOCKER_ID_LOG_FORMAT
 
 # noinspection PyUnresolvedReferences
@@ -41,12 +48,21 @@ TEST_ORCH_ID = calico_kubernetes.ORCHESTRATOR_ID
 
 _log = logging.getLogger(__name__)
 
+CONFIG = {
+    KUBE_API_ROOT_VAR: "",
+    KUBE_AUTH_TOKEN_VAR: "",
+    CALICO_IPAM_VAR: "true",
+    ETCD_AUTHORITY_VAR: "",
+    LOG_LEVEL_VAR: "",
+    DEFAULT_POLICY_VAR: "",
+}
+
 
 class NetworkPluginTest(unittest.TestCase):
 
     def setUp(self):
         self.namespace = "testNamespace"
-        self.plugin = calico_kubernetes.NetworkPlugin()
+        self.plugin = calico_kubernetes.NetworkPlugin(CONFIG)
         self.plugin.namespace = self.namespace
         self.plugin.profile_name = "test_profile_name"
 
@@ -502,7 +518,7 @@ class NetworkPluginTest(unittest.TestCase):
         with patch.object(self.plugin, "_read_docker_ip") as m_read_ip:
 
             # Don't use CALICO_IPAM for this test.
-            calico_kubernetes.CALICO_IPAM = "false"
+            self.plugin.calico_ipam = "false"
 
             # Mock the Docker IP
             docker_ip = "172.12.23.4"
@@ -540,7 +556,7 @@ class NetworkPluginTest(unittest.TestCase):
         with patch.object(self.plugin, "_read_docker_ip") as m_read_ip:
 
             # Don't use CALICO_IPAM for this test.
-            calico_kubernetes.CALICO_IPAM = "false"
+            self.plugin.calico_ipam = "false"
 
             # Mock the Docker IP
             docker_ip = "172.12.23.4"
@@ -806,13 +822,15 @@ class NetworkPluginTest(unittest.TestCase):
         path = 'path/to/api/object'
 
         # Call method under test
+        api_root = "http://kubernetesapi:8080/api/v1"
+        self.plugin.api_root = api_root
         self.plugin._get_api_path(path)
 
         # Assert correct data in calls.
         m_session_return.headers.update.assert_called_once_with(
             {'Authorization': 'Bearer ' + 'TOKEN'})
         m_session_return.get.assert_called_once_with(
-            calico_kubernetes.KUBE_API_ROOT + 'path/to/api/object',
+            api_root + 'path/to/api/object',
             verify=False)
         m_json_load.assert_called_once_with('response_body')
 
@@ -894,32 +912,6 @@ class NetworkPluginTest(unittest.TestCase):
         # Assert return value is correct.
         assert_equal(return_val, expected)
 
-    def test_generate_rules_ns_iso(self):
-        """Test _generate_rules with ns_isolation
-
-        Test that ns_isolation is default policy when set.
-        """
-        pod = {
-                'metadata': {
-                                'name': 'name',
-                                'namespace': 'ns'
-                }
-              }
-        self.plugin.namespace = 'ns'
-        calico_kubernetes.DEFAULT_POLICY = 'ns_isolation'
-
-        # Call method under test empty annotations/namespace
-        return_val = self.plugin._generate_rules(pod)
-
-        inbound = [Rule(action="allow", src_tag="namespace_ns")]
-        outbound = [Rule(action="allow")]
-        expected = Rules(id=self.plugin.profile_name,
-                         inbound_rules=inbound,
-                         outbound_rules=outbound)
-
-        # Assert return value is correct.
-        assert_equal(return_val, expected)
-
     def test_generate_rules_ns_iso_override(self):
         """Test _generate_rules with ns_isolation and programmed policy
 
@@ -935,7 +927,7 @@ class NetworkPluginTest(unittest.TestCase):
             }
         }
         self.plugin.namespace = 'ns'
-        calico_kubernetes.DEFAULT_POLICY = 'ns_isolation'
+        self.plugin.default_policy = "ns_isolation"
 
         # Call method under test empty annotations/namespace
         return_val = self.plugin._generate_rules(pod)
@@ -950,9 +942,9 @@ class NetworkPluginTest(unittest.TestCase):
                          outbound_rules=[{'action': 'allow'}])
         assert_equal(return_val, expected)
 
-    @patch.object(calico_kubernetes, "DEFAULT_POLICY", "ns_isolation")
     def test_generate_rules_ns_isolation(self):
         pod = {'metadata': {'profile': 'name'}}
+        self.plugin.default_policy = "ns_isolation"
 
         # Expected result
         ns_tag = "namespace_%s" % self.plugin.namespace
@@ -1072,7 +1064,8 @@ class NetworkPluginTest(unittest.TestCase):
     @patch('calico_kubernetes.calico_kubernetes.run')
     @patch('calico_kubernetes.tests.kube_plugin_test.'
            'calico_kubernetes.configure_logger', autospec=True)
-    def test_run_protected(self, m_mode, m_conf_logger, m_run, m_sys_exit):
+    @patch('calico_kubernetes.calico_kubernetes.load_config', autospec=True)
+    def test_run_protected(self, m_mode, m_load_config, m_conf_logger, m_run, m_sys_exit):
         """Test global method run_protected
 
         Ensure code path not broken
@@ -1089,9 +1082,9 @@ class NetworkPluginTest(unittest.TestCase):
         assert_true(len(m_conf_logger.mock_calls) > 0)
         # Check we actually called the work function.
         if m_mode == 'init':
-            m_run.assert_called_with(mode=m_mode, namespace=None, pod_name=None, docker_id=None)
+            m_run.assert_called_with(mode=m_mode, namespace=None, pod_name=None, docker_id=None, config=m_load_config())
         else:
-            m_run.assert_called_with(mode=m_mode, namespace='ns_ns', pod_name='pod_pod', docker_id='id')
+            m_run.assert_called_with(mode=m_mode, namespace='ns_ns', pod_name='pod_pod', docker_id='id', config=m_load_config())
         # We should exit without error.
         m_sys_exit.assert_called_with(0)
 
@@ -1099,7 +1092,8 @@ class NetworkPluginTest(unittest.TestCase):
     @patch('calico_kubernetes.calico_kubernetes.run')
     @patch('calico_kubernetes.tests.kube_plugin_test.'
            'calico_kubernetes.configure_logger', autospec=True)
-    def test_run_protected_sys_exit(self, _, m_run, m_sys_exit):
+    @patch('calico_kubernetes.calico_kubernetes.load_config', autospec=True)
+    def test_run_protected_sys_exit(self, m_load_config, _, m_run, m_sys_exit):
         """Test failure in global method run_protected"""
         for exception_cls in (SystemExit, RuntimeError):
             _log.info('Testing that we handle %s exceptions',
@@ -1126,7 +1120,7 @@ class NetworkPluginTest(unittest.TestCase):
 
         Check for desired calls given a variety of inputs
         """
-        calico_kubernetes.run(m_mode, m_namespace, m_pod_name, m_docker_id)
+        calico_kubernetes.run(m_mode, m_namespace, m_pod_name, m_docker_id, CONFIG)
         if m_mode == 'status':
             m_plugin().status.assert_called_once_with(m_namespace, m_pod_name, m_docker_id)
         elif m_mode == 'setup':
@@ -1185,7 +1179,7 @@ class NetworkPluginTest(unittest.TestCase):
 
         Should return True
         """
-        calico_kubernetes.KUBE_API_ROOT = "https://test.com"
+        self.plugin.api_root = "https://test.com"
         return_val = self.plugin._api_root_secure()
         assert_true(return_val)
 
@@ -1194,7 +1188,7 @@ class NetworkPluginTest(unittest.TestCase):
 
         Should return False
         """
-        calico_kubernetes.KUBE_API_ROOT = "http://test.com"
+        self.plugin.api_root = "http://test.com"
         return_val = self.plugin._api_root_secure()
         assert_false(return_val)
 
@@ -1203,5 +1197,127 @@ class NetworkPluginTest(unittest.TestCase):
 
         Should raise SystemExit
         """
-        calico_kubernetes.KUBE_API_ROOT = "invalid"
+        self.plugin.api_root = "invalid"
         assert_raises(SystemExit, self.plugin._api_root_secure)
+
+    @patch("calico_kubernetes.calico_kubernetes.read_config_file", autospec=True)
+    @patch("calico_kubernetes.calico_kubernetes.os.environ", autospec=True)
+    def test_load_config_no_env(self, m_os_env, m_read_file):
+        """test_load_config when no env vars defined
+
+        When no environment varibles are defined, should use
+        the file configuration.
+        """
+        # Mock
+        file_resp = {
+            ETCD_AUTHORITY_VAR: "etcd-auth",
+            KUBE_AUTH_TOKEN_VAR: "kube-auth",
+            KUBE_API_ROOT_VAR: "kube-api",
+            DEFAULT_POLICY_VAR: "default-policy",
+            CALICO_IPAM_VAR: "calico-ipam",
+            LOG_LEVEL_VAR: "log-level",
+        }
+        # Deepcopy so that the original is not modified.
+        m_read_file.return_value = copy.deepcopy(file_resp)
+
+        # Mock get() to return default value.
+        m_os_env.get.side_effect = lambda x,y: y
+
+        # Call method
+        config = calico_kubernetes.load_config()
+
+        # The response should equal the file config.
+        file_resp[LOG_LEVEL_VAR] = "LOG-LEVEL"
+        assert_equal(config, file_resp)
+
+    @patch("calico_kubernetes.calico_kubernetes.read_config_file", autospec=True)
+    @patch("calico_kubernetes.calico_kubernetes.os", autospec=True)
+    def test_load_config_env(self, m_os, m_read_file):
+        """test_load_config when env vars defined
+        """
+        # Mock
+        file_resp = {
+            ETCD_AUTHORITY_VAR: "",
+            KUBE_AUTH_TOKEN_VAR: "",
+            KUBE_API_ROOT_VAR: "",
+            DEFAULT_POLICY_VAR: "",
+            CALICO_IPAM_VAR: "",
+            LOG_LEVEL_VAR: "",
+        }
+        m_read_file.return_value = file_resp 
+        m_os.environ.get.side_effect = lambda x,y: x
+
+        # Call method
+        config = calico_kubernetes.load_config()
+
+        # The response should equal the file config.
+        expected_resp = {
+            ETCD_AUTHORITY_VAR: ETCD_AUTHORITY_VAR,
+            KUBE_AUTH_TOKEN_VAR: KUBE_AUTH_TOKEN_VAR,
+            KUBE_API_ROOT_VAR: KUBE_API_ROOT_VAR,
+            DEFAULT_POLICY_VAR: DEFAULT_POLICY_VAR,
+            CALICO_IPAM_VAR: CALICO_IPAM_VAR,
+            LOG_LEVEL_VAR: LOG_LEVEL_VAR,
+        }
+        assert_equal(config, expected_resp)
+
+    @patch("calico_kubernetes.calico_kubernetes.ConfigParser.ConfigParser", autospec=True)
+    @patch("calico_kubernetes.calico_kubernetes.os", autospec=True)
+    def test_read_config_file(self, m_os, m_parser):
+        """test_read_config_file
+
+        Tests reading from config file.
+        """
+        # Mock
+        m_parser().sections.return_value = ["config"]
+        m_parser().get.return_value = "default"
+        m_os.path.isfile.return_value = True
+
+        # Call method under test
+        config = calico_kubernetes.read_config_file()
+
+        # Assert config equal
+        expected = {
+            ETCD_AUTHORITY_VAR: "default",
+            KUBE_AUTH_TOKEN_VAR: "default",
+            KUBE_API_ROOT_VAR: "default",
+            DEFAULT_POLICY_VAR: "default",
+            CALICO_IPAM_VAR: "default",
+            LOG_LEVEL_VAR: "default",
+        }
+        assert_equal(config, expected)
+
+    @patch("calico_kubernetes.calico_kubernetes.ConfigParser.ConfigParser", autospec=True)
+    @patch("calico_kubernetes.calico_kubernetes.os", autospec=True)
+    def test_read_config_file_invalid(self, m_os, m_parser):
+        """test_read_config_file_invalid no config section.
+
+        Invalid config file - no [section]
+        """
+        # Mock
+        m_parser().sections.return_value = []
+        m_os.path.isfile.return_value = True
+
+        # Call method under test
+        assert_raises(SystemExit, calico_kubernetes.read_config_file)
+
+    @patch("calico_kubernetes.calico_kubernetes.ConfigParser.ConfigParser", autospec=True)
+    @patch("calico_kubernetes.calico_kubernetes.os", autospec=True)
+    def test_read_config_file_missing(self, m_os, m_parser):
+        """test_read_config_file_missing
+        """
+        # Mock
+        m_os.path.isfile.return_value = False
+
+        # Defaults
+        defaults = {
+            ETCD_AUTHORITY_VAR: "127.0.0.1:2379",
+            CALICO_IPAM_VAR: "true",
+            KUBE_API_ROOT_VAR: "http://kubernetes-master:8080/api/v1",
+            DEFAULT_POLICY_VAR: "allow",
+            KUBE_AUTH_TOKEN_VAR: None,
+            LOG_LEVEL_VAR: "INFO",
+        }
+
+        # Call method under test
+        assert_equal(defaults, calico_kubernetes.read_config_file())
