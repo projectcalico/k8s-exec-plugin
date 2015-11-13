@@ -54,13 +54,21 @@ CONFIG_FILENAME = "calico_kubernetes.ini"
 
 POLICY_ANNOTATION_KEY = "projectcalico.org/policy"
 
-# Values in configuration dictionary
+# Values in configuration dictionary.
 ETCD_AUTHORITY_VAR = "ETCD_AUTHORITY"
 LOG_LEVEL_VAR = "LOG_LEVEL"
 KUBE_AUTH_TOKEN_VAR = "KUBE_AUTH_TOKEN"
 KUBE_API_ROOT_VAR = "KUBE_API_ROOT"
 CALICO_IPAM_VAR = "CALICO_IPAM"
 DEFAULT_POLICY_VAR = "DEFAULT_POLICY"
+
+# All environment variables used by the plugin.
+ENVIRONMENT_VARS = [ETCD_AUTHORITY_VAR,
+                    LOG_LEVEL_VAR,
+                    KUBE_AUTH_TOKEN_VAR,
+                    KUBE_API_ROOT_VAR,
+                    CALICO_IPAM_VAR,
+                    DEFAULT_POLICY_VAR]
 
 
 class NetworkPlugin(object):
@@ -733,19 +741,9 @@ def load_config():
     # First, read the config file and get defaults.
     config = read_config_file()
 
-    # Get config from environment.
-    env_config = {
-            CALICO_IPAM_VAR: os.environ.get(CALICO_IPAM_VAR),
-            KUBE_API_ROOT_VAR: os.environ.get(KUBE_API_ROOT_VAR),
-            DEFAULT_POLICY_VAR: os.environ.get(DEFAULT_POLICY_VAR),
-            KUBE_AUTH_TOKEN_VAR: os.environ.get(KUBE_AUTH_TOKEN_VAR),
-    }
-
-    # Environment variables take precedence.
-    for k,v in env_config.iteritems():
-        if v is not None:
-            logger.debug("Use env variable: %s=%s", k, v)
-            config[k] = v
+    # Get config from environment, if defined.
+    for var in ENVIRONMENT_VARS:
+        config[var] = os.environ.get(var, config[var])
 
     # ETCD_AUTHORITY is handled slightly differently - we need to set it in the
     # environment so that libcalico works correctly.
@@ -754,6 +752,9 @@ def load_config():
                      ETCD_AUTHORITY_VAR,
                      config[ETCD_AUTHORITY_VAR])
         os.environ[ETCD_AUTHORITY_VAR] = config[ETCD_AUTHORITY_VAR]
+
+    # Ensure case is correct.
+    config[LOG_LEVEL_VAR] = config[LOG_LEVEL_VAR].upper()
 
     return config
 
@@ -768,7 +769,7 @@ def read_config_file():
     config_file = os.path.join(cur_dir, CONFIG_FILENAME)
 
     # Check that the file exists.
-    if not os.path.exists(config_file):
+    if not os.path.isfile(config_file):
         sys.exit("Cannot find configuration file: %s" % config_file)
 
     # Create dictionary of default values.
@@ -791,12 +792,8 @@ def read_config_file():
         sys.exit("No [config] section in file %s" % config_file)
 
     # Get any values from the configuration file and populate dictionary.
-    config[ETCD_AUTHORITY_VAR] = parser.get("config", ETCD_AUTHORITY_VAR)
-    config[CALICO_IPAM_VAR] = parser.get("config", CALICO_IPAM_VAR)
-    config[KUBE_API_ROOT_VAR] = parser.get("config", KUBE_API_ROOT_VAR)
-    config[DEFAULT_POLICY_VAR] = parser.get("config", DEFAULT_POLICY_VAR)
-    config[KUBE_AUTH_TOKEN_VAR] = parser.get("config", KUBE_AUTH_TOKEN_VAR)
-    config[LOG_LEVEL_VAR] = parser.get("config", LOG_LEVEL_VAR).upper()
+    for var in ENVIRONMENT_VARS:
+        config[var] = parser.get("config", var)
 
     return config
 

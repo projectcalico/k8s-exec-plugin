@@ -1215,17 +1215,19 @@ class NetworkPluginTest(unittest.TestCase):
             KUBE_API_ROOT_VAR: "kube-api",
             DEFAULT_POLICY_VAR: "default-policy",
             CALICO_IPAM_VAR: "calico-ipam",
+            LOG_LEVEL_VAR: "log-level",
         }
         # Deepcopy so that the original is not modified.
         m_read_file.return_value = copy.deepcopy(file_resp)
-        m_os_env.get.return_value = None
+
+        # Mock get() to return default value.
+        m_os_env.get.side_effect = lambda x,y: y
 
         # Call method
         config = calico_kubernetes.load_config()
 
         # The response should equal the file config.
-        expected = {
-        }
+        file_resp[LOG_LEVEL_VAR] = "LOG-LEVEL"
         assert_equal(config, file_resp)
 
     @patch("calico_kubernetes.calico_kubernetes.read_config_file", autospec=True)
@@ -1234,9 +1236,16 @@ class NetworkPluginTest(unittest.TestCase):
         """test_load_config when env vars defined
         """
         # Mock
-        file_resp = {ETCD_AUTHORITY_VAR: ETCD_AUTHORITY_VAR}
+        file_resp = {
+            ETCD_AUTHORITY_VAR: "",
+            KUBE_AUTH_TOKEN_VAR: "",
+            KUBE_API_ROOT_VAR: "",
+            DEFAULT_POLICY_VAR: "",
+            CALICO_IPAM_VAR: "",
+            LOG_LEVEL_VAR: "",
+        }
         m_read_file.return_value = file_resp 
-        m_os.environ.get.side_effect = lambda x: x
+        m_os.environ.get.side_effect = lambda x,y: x
 
         # Call method
         config = calico_kubernetes.load_config()
@@ -1248,6 +1257,7 @@ class NetworkPluginTest(unittest.TestCase):
             KUBE_API_ROOT_VAR: KUBE_API_ROOT_VAR,
             DEFAULT_POLICY_VAR: DEFAULT_POLICY_VAR,
             CALICO_IPAM_VAR: CALICO_IPAM_VAR,
+            LOG_LEVEL_VAR: LOG_LEVEL_VAR,
         }
         assert_equal(config, expected_resp)
 
@@ -1261,7 +1271,7 @@ class NetworkPluginTest(unittest.TestCase):
         # Mock
         m_parser().sections.return_value = ["config"]
         m_parser().get.return_value = "default"
-        m_os.path.exists.return_value = True
+        m_os.path.isfile.return_value = True
 
         # Call method under test
         config = calico_kubernetes.read_config_file()
@@ -1273,7 +1283,7 @@ class NetworkPluginTest(unittest.TestCase):
             KUBE_API_ROOT_VAR: "default",
             DEFAULT_POLICY_VAR: "default",
             CALICO_IPAM_VAR: "default",
-            LOG_LEVEL_VAR: "DEFAULT", 
+            LOG_LEVEL_VAR: "default",
         }
         assert_equal(config, expected)
 
@@ -1286,7 +1296,7 @@ class NetworkPluginTest(unittest.TestCase):
         """
         # Mock
         m_parser().sections.return_value = []
-        m_os.path.exists.return_value = True
+        m_os.path.isfile.return_value = True
 
         # Call method under test
         assert_raises(SystemExit, calico_kubernetes.read_config_file)
@@ -1297,7 +1307,7 @@ class NetworkPluginTest(unittest.TestCase):
         """test_read_config_file_missing
         """
         # Mock
-        m_os.path.exists.return_value = False 
+        m_os.path.isfile.return_value = False
 
         # Call method under test
         assert_raises(SystemExit, calico_kubernetes.read_config_file)
