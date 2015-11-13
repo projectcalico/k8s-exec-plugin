@@ -1,0 +1,201 @@
+#cloud-config
+---
+hostname: <HOSTNAME> 
+users:
+  - name: core
+    ssh-authorized-keys: 
+      - <SSH_PUBLIC_KEY>
+    groups: 
+      - sudo
+    shell: /bin/bash
+
+write_files:
+  - path: /etc/calico-environment
+    owner: root
+    permissions: 0755
+    content: |
+      # The Kubernetes master IP
+      KUBERNETES_MASTER=<KUBERNETES_MASTER>
+      
+      # IP and port of etcd instance used by Calico
+      ETCD_AUTHORITY=<KUBERNETES_MASTER>:6666
+      
+      # URL to access the Kubernetes apiserver
+      KUBE_API_ROOT=http://<KUBERNETES_MASTER>:8080/api/v1/
+      
+      # Enable Calcio IPAM
+      CALICO_IPAM=true
+
+  - path: /opt/bin/setup-network-environment.sh
+    owner: root
+    permissions: 0755
+    content: |
+      #! /usr/bin/bash
+
+      # Download binary 
+      mkdir -p /opt/bin
+      wget -N -P /opt/bin https://github.com/kelseyhightower/setup-network-environment/releases/download/v1.0.0/setup-network-environment
+      chmod +x /opt/bin/setup-network-environment
+
+      # Run setup-network-environment.
+      /opt/bin/setup-network-environment
+
+      # Combine network-environment and calico-environment.
+      echo " " >> /etc/network-environment
+      echo "# --- Begin appended /etc/calico-environment --" >> /etc/network-environment
+      cat /etc/calico-environment >> /etc/network-environment
+ 
+  - path: /opt/bin/kubernetes-install.sh
+    owner: root
+    permissions: 0755
+    content: |
+      #! /usr/bin/bash
+      
+      if [ ! -f /opt/bin/kubelet ]; then
+        echo "Kubenetes not installed - installing."
+
+        # Get the Kubernetes Release.
+        wget https://github.com/kubernetes/kubernetes/releases/download/v1.1.0/kubernetes.tar.gz
+        
+        # Extract the Kubernetes binaries.
+        tar -xf kubernetes.tar.gz
+        tar -xf kubernetes/server/kubernetes-server-linux-amd64.tar.gz
+        
+        # Install the `kubelet` and `kubectl` binaries.
+        sudo chmod +x kubernetes/server/bin/kubelet
+        sudo chmod +x kubernetes/server/bin/kube-proxy
+        sudo cp -f kubernetes/server/bin/kubelet /opt/bin
+        sudo cp -f kubernetes/server/bin/kube-proxy /opt/bin
+      fi
+
+  - path: /opt/bin/calico-install.sh
+    owner: root
+    permissions: 0755
+    content: |
+      #! /usr/bin/bash
+      
+      if [ ! -f /opt/bin/calicoctl ]; then
+        echo "Calico not installed - installing."
+       
+        # Install the `calicoctl` binary
+        wget https://github.com/projectcalico/calico-docker/releases/download/v0.9.0/calicoctl
+        chmod +x calicoctl
+        sudo mv calicoctl /opt/bin
+
+        # Fetch the calico/node container
+        sudo docker pull calico/node:v0.9.0 
+      fi
+
+coreos:
+  update:
+    reboot-strategy: off
+  units:
+    - name: setup-network-environment.service
+      runtime: true
+      command: start
+      content: |
+        [Unit]
+        Description=Setup Network Environment
+        Documentation=https://github.com/kelseyhightower/setup-network-environment
+        Requires=network-online.target
+        After=network-online.target
+
+        [Service]
+        ExecStart=/opt/bin/setup-network-environment.sh
+        RemainAfterExit=yes
+        Type=oneshot
+
+    - name: kubernetes-install.service
+      runtime: true
+      command: start
+      content: |
+        [Unit]
+        Description=Installs Kubernetes tools
+        After=network-online.target
+        Requires=network-online.target
+
+        [Service]
+        ExecStart=/opt/bin/kubernetes-install.sh
+        RemainAfterExit=yes
+        Type=oneshot
+
+    - name: calico-install.service
+      runtime: true
+      command: start
+      content: |
+        [Unit]
+        Description=Installs Calico tools
+        After=kubernetes-install.service
+        Requires=docker.service
+
+        [Service]
+        ExecStart=/opt/bin/calico-install.sh
+        RemainAfterExit=yes
+        Type=oneshot
+
+    - name: calico-node.service
+      runtime: true
+      command: start
+      content: |
+        [Unit]
+        Description=calicoctl node
+        After=calico-install.service
+        Requires=docker.service
+        
+        [Service]
+        User=root
+        EnvironmentFile=/etc/network-environment
+        PermissionsStartOnly=true
+        ExecStart=/opt/bin/calicoctl node --kubernetes --kube-plugin-version=v0.4.0 --detach=false
+        Restart=always
+        RestartSec=10
+    
+        [Install]
+        WantedBy=multi-user.target
+
+    - name: kubelet.service
+      runtime: true
+      command: start
+      content: |
+        [Unit]
+        Description=Kubernetes Kubelet
+        Documentation=https://github.com/kubernetes/kubernetes
+        After=calico-node.service
+        Requires=calico-node.service
+
+        [Service]
+        EnvironmentFile=/etc/network-environment
+        ExecStart=/opt/bin/kubelet \
+        --address=0.0.0.0 \
+        --port=10250 \
+        --hostname_override=${DEFAULT_IPV4} \
+        --cluster-dns=10.100.0.10 \
+        --cluster-domain=cluster.local \
+        --api_servers=${KUBERNETES_MASTER}:8080 \
+        --network_plugin=calico \
+        --network_plugin_dir=/etc/kubelet-plugins \
+        --logtostderr=true
+        Restart=always
+        RestartSec=10
+
+        [Install]
+        WantedBy=multi-user.target
+
+    - name: kube-proxy.service
+      runtime: true
+      command: start
+      content: |
+        [Unit]
+        Description=Kubernetes Proxy
+        Documentation=https://github.com/kubernetes/kubernetes
+        After=calico-node.service
+        Requires=calico-node.service
+
+        [Service]
+        EnvironmentFile=/etc/network-environment
+        ExecStart=/opt/bin/kube-proxy --master=http://${KUBERNETES_MASTER}:8080 --logtostderr=true --proxy-mode=iptables
+        Restart=always
+        RestartSec=10
+
+        [Install]
+        WantedBy=multi-user.target
