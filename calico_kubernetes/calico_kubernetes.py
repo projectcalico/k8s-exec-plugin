@@ -535,6 +535,7 @@ class NetworkPlugin(object):
         """
         with requests.Session() as session:
             if self._api_root_secure() and self.auth_token:
+                logger.debug('Updating header with Token %s', self.auth_token)
                 session.headers.update({'Authorization':
                                         'Bearer ' + self.auth_token})
 
@@ -542,7 +543,7 @@ class NetworkPlugin(object):
                                 'namespaces/%s/pods/%s' % (self.namespace,
                                                            self.pod_name))
             try:
-                logger.debug('Fetching API Resource from %s', path)
+                logger.debug('Querying API for Pod: %s', path)
                 response = session.get(path, verify=False)
             except BaseException:
                 logger.exception("Exception hitting Kubernetes API")
@@ -566,8 +567,10 @@ class NetworkPlugin(object):
         :return: Boolean: True if secure. False if insecure
         """
         if (self.api_root[:5] == 'https'):
+            logger.debug('Using Secure API access.')
             return True
         elif (self.api_root[:5] == 'http:'):
+            logger.debug('Using Insecure API access.')
             return False
         else:
             logger.error('%s is not set correctly (%s). '
