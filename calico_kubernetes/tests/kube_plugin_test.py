@@ -15,6 +15,7 @@ import os
 import sys
 import json
 import logging
+import requests
 import unittest
 import copy
 
@@ -80,7 +81,9 @@ class NetworkPluginTest(unittest.TestCase):
                 patch_object(self.plugin, '_configure_profile',
                              autospec=True) as m_configure_profile:
             # Set up mock objects
-            m_configure_interface.return_value = 'endpt_id'
+            endpoint = Mock()
+            endpoint.endpoint_id = "12345abcd_endpoint_id"
+            m_configure_interface.return_value = endpoint
 
             # Set up args
             namespace = 'ns'
@@ -97,7 +100,7 @@ class NetworkPluginTest(unittest.TestCase):
             assert_equal(docker_id, self.plugin.docker_id)
             assert_equal(profile_name, self.plugin.profile_name)
             m_configure_interface.assert_called_once_with()
-            m_configure_profile.assert_called_once_with('endpt_id')
+            m_configure_profile.assert_called_once_with(endpoint)
 
     def test_create_error(self):
         """Test Pod Creation Hook Failure"""
@@ -187,6 +190,20 @@ class NetworkPluginTest(unittest.TestCase):
                                                                      orchestrator_id=TEST_ORCH_ID,
                                                                      workload_id=docker_id)
         m_print.assert_called_once_with(json.dumps(json_dict))
+
+    @patch('__builtin__.print', autospec=True)
+    def test_status_host_network(self, m_print):
+        """Test Pod Status Hook for Host Networked Pod"""
+        # Set up args
+        namespace = 'ns'
+        pod_name = 'pod1'
+        docker_id = 123456789101112
+        self.plugin._uses_host_networking = Mock()
+        self.plugin._uses_host_networking.return_value = True
+
+        # Call method under test
+        assert_raises(SystemExit, self.plugin.status, namespace, pod_name, docker_id)
+        assert_false(self.m_datastore_client.get_endpoint.called)
 
     @patch('__builtin__.print', autospec=True)
     def test_status_no_ip(self, m_print):
@@ -758,81 +775,103 @@ class NetworkPluginTest(unittest.TestCase):
         # Assert
         self.assertListEqual(return_val, ports)
 
-    def test_get_pod_config(self):
-        """Test _get_pod_config
-
-        Given a list of pods and a queried pod name, ensure that the proper data is returned.
-        """
-        with patch_object(self.plugin, '_get_api_path',
-                          autospec=True) as m_get_api_path:
-            # Set up mock object
-            pod1 = {'metadata': {'namespace': 'a', 'name': 'pod-1'}}
-            pod2 = {'metadata': {'namespace': 'a', 'name': 'pod-2'}}
-            pod3 = {'metadata': {'namespace': 'a', 'name': 'pod-3'}}
-            pods = [pod1, pod2, pod3]
-            m_get_api_path.return_value = pods
-
-            # Set up class member
-            self.plugin.pod_name = 'pod-2'
-            self.plugin.namespace = 'a'
-
-            # Call method under test
-            return_val = self.plugin._get_pod_config()
-
-            # Assert
-            assert_equal(return_val, pod2)
-
-    def test_get_pod_config_error(self):
-        """Test _get_pod_config Failure
-
-        Given a list of pods and an invalid pod name, ensure that a KeyError is raised.
-        """
-        with patch_object(self.plugin, '_get_api_path',
-                          autospec=True) as m_get_api_path:
-            # Set up mock object and class members
-            pod1 = {'metadata': {'name': 'pod-1', 'namespace': 'ns'}}
-            pods = [pod1]
-            m_get_api_path.return_value = pods
-
-            # Set up class member
-            self.plugin.pod_name = 'corrupt'
-            self.plugin.namespace = 'ns'
-
-            # Call method under test expecting exception
-            assert_raises(KeyError, self.plugin._get_pod_config)
-
     @patch('calico_kubernetes.calico_kubernetes.requests.Session',
            autospec=True)
+    @patch('calico_kubernetes.calico_kubernetes.NetworkPlugin._api_root_secure',
+           autospec=True)
     @patch('json.loads', autospec=True)
-    def test_get_api_path(self, m_json_load, m_session):
-        """Test _get_api_path
+    def test_get_pod_config(self, m_json_load, m_secure, m_session):
+        """Test _get_pod_config Success
 
         Test for correct calls in _get_api_path.
         """
-        # Set up mock objects
-        self.plugin.auth_token = 'TOKEN'
-        m_session_return = Mock()
-        m_session_return.headers = Mock()
-        m_get_return = Mock()
-        m_get_return.text = 'response_body'
-        m_session_return.get.return_value = m_get_return
-        m_session.return_value = m_session_return
+        # Set up class member
+        self.plugin.pod_name = 'pod-1'
+        self.plugin.namespace = 'a'
+        pod1 = '{"metadata": {"namespace": "a", "name": "pod-1"}}'
 
-        # Initialize args
-        path = 'path/to/api/object'
+        # Set up mock objects
+        m_secure.return_value = True
+        self.plugin.auth_token = 'TOKEN'
+
+        get_obj = Mock()
+        get_obj.status_code = 200
+        get_obj.text = pod1
+
+        m_session_obj = Mock()
+        m_session_obj.headers = Mock()
+        m_session_obj.get.return_value = get_obj
+
+        m_session.return_value = m_session_obj
+        m_session_obj.__enter__ = Mock(return_value=m_session_obj)
+        m_session_obj.__exit__ = Mock(return_value=False)
 
         # Call method under test
-        api_root = "http://kubernetesapi:8080/api/v1"
+        api_root = "http://kubernetesapi:8080/api/v1/"
         self.plugin.api_root = api_root
-        self.plugin._get_api_path(path)
+        self.plugin._get_pod_config()
 
         # Assert correct data in calls.
-        m_session_return.headers.update.assert_called_once_with(
+        m_session_obj.headers.update.assert_called_once_with(
             {'Authorization': 'Bearer ' + 'TOKEN'})
-        m_session_return.get.assert_called_once_with(
-            api_root + 'path/to/api/object',
+        m_session_obj.get.assert_called_once_with(
+            api_root + 'namespaces/a/pods/pod-1',
             verify=False)
-        m_json_load.assert_called_once_with('response_body')
+        m_json_load.assert_called_once_with(pod1)
+
+    @patch('calico_kubernetes.calico_kubernetes.requests.Session',
+           autospec=True)
+    @patch('calico_kubernetes.calico_kubernetes.NetworkPlugin._api_root_secure',
+           autospec=True)
+    @patch('json.loads', autospec=True)
+    def test_get_pod_config_error(self, m_json_load, m_secure, m_session):
+        """Test _get_api_path with API Access Error
+        """
+        # Set up mock objects
+        m_secure.return_value = True
+        self.plugin.auth_token = 'TOKEN'
+
+        m_session_obj = Mock()
+        m_session_obj.headers = Mock()
+        m_session_obj.get.side_effect = BaseException
+
+        m_session.return_value = m_session_obj
+        m_session_obj.__enter__ = Mock(return_value=m_session_obj)
+        m_session_obj.__exit__ = Mock(return_value=False)
+
+        # Call method under test
+        assert_raises(SystemExit, self.plugin._get_pod_config)
+
+    @patch('calico_kubernetes.calico_kubernetes.requests.Session',
+           autospec=True)
+    @patch('calico_kubernetes.calico_kubernetes.NetworkPlugin._api_root_secure',
+           autospec=True)
+    @patch('json.loads', autospec=True)
+    def test_get_pod_config_response_code(self, m_json_load, m_secure, m_session):
+        """Test _get_api_path with incorrect status_code
+        """
+        # Set up class member
+        self.plugin.pod_name = 'pod-1'
+        self.plugin.namespace = 'a'
+        pod1 = '{"metadata": {"namespace": "a", "name": "pod-1"}}'
+
+        # Set up mock objects
+        m_secure.return_value = True
+        self.plugin.auth_token = 'TOKEN'
+
+        get_obj = Mock()
+        get_obj.status_code = 404
+
+        m_session_obj = Mock()
+        m_session_obj.headers = Mock()
+        m_session_obj.get.return_value = get_obj
+
+        m_session.return_value = m_session_obj
+        m_session_obj.__enter__ = Mock(return_value=m_session_obj)
+        m_session_obj.__exit__ = Mock(return_value=False)
+
+        # Call method under test
+        assert_raises(SystemExit, self.plugin._get_pod_config)
 
     def test_generate_rules(self):
         """Test _generate_rules
@@ -1094,17 +1133,28 @@ class NetworkPluginTest(unittest.TestCase):
            'calico_kubernetes.configure_logger', autospec=True)
     @patch('calico_kubernetes.calico_kubernetes.load_config', autospec=True)
     def test_run_protected_sys_exit(self, m_load_config, _, m_run, m_sys_exit):
-        """Test failure in global method run_protected"""
-        for exception_cls in (SystemExit, RuntimeError):
-            _log.info('Testing that we handle %s exceptions',
-                      str(exception_cls.__name__))
-            m_run.side_effect = exception_cls
+        """Test run_protected when SystemExit is called"""
+        m_run.side_effect = SystemExit(555)
 
-            with patch_object(sys, 'argv', [None, 'status', 'ns/ns', 'pod/pod', 'id']) as m_argv:
-                calico_kubernetes.run_protected()
+        with patch_object(sys, 'argv', [None, 'status', 'ns/ns', 'pod/pod', 'id']) as m_argv:
+            calico_kubernetes.run_protected()
 
-            # We should exit without error.
-            m_sys_exit.assert_called_with(1)
+        # We should exit with error.
+        m_sys_exit.assert_called_once_with(555)
+
+    @patch('sys.exit', autospec=True)
+    @patch('calico_kubernetes.calico_kubernetes.run')
+    @patch('calico_kubernetes.tests.kube_plugin_test.'
+           'calico_kubernetes.configure_logger', autospec=True)
+    def test_run_protected_uncaught(self, _, m_run, m_sys_exit):
+        """Test run_protected when uncaught Exception is called"""
+        m_run.side_effect = RuntimeError
+
+        with patch_object(sys, 'argv', ["config", 'status', 'ns/ns', 'pod/pod', 'id']) as m_argv:
+            calico_kubernetes.run_protected()
+
+        # We should exit with error.
+        m_sys_exit.assert_called_once_with(1)
 
     # mode, namespace, pod_name, docker_id
     @parameterized.expand([
@@ -1136,7 +1186,7 @@ class NetworkPluginTest(unittest.TestCase):
     ])
     @patch('os.path', autospec=True)
     @patch('os.makedirs', autospec=True)
-    @patch('calico_kubernetes.logutils.ConcurrentRotatingFileHandler', 
+    @patch('calico_kubernetes.logutils.ConcurrentRotatingFileHandler',
            autospec=True)
     @patch('logging.StreamHandler', autospec=True)
     @patch('logging.Formatter', autospec=True)
@@ -1155,7 +1205,7 @@ class NetworkPluginTest(unittest.TestCase):
 
         logutils.configure_logger(logger=m_log,
                                   log_level=logging.DEBUG,
-                                  log_format="FORMAT", 
+                                  log_format="FORMAT",
                                   log_to_stdout=m_log_to_stdout,
                                   log_dir='/mock/')
 
@@ -1168,7 +1218,7 @@ class NetworkPluginTest(unittest.TestCase):
 
         # Test stdout config calls.
         if m_log_to_stdout:
-            m_log.addHandler.assert_has_calls([call(f_handler), 
+            m_log.addHandler.assert_has_calls([call(f_handler),
                                                call(s_handler)])
         else:
             m_log.addHandler.assert_called_once_with(f_handler)
@@ -1244,7 +1294,7 @@ class NetworkPluginTest(unittest.TestCase):
             CALICO_IPAM_VAR: "",
             LOG_LEVEL_VAR: "",
         }
-        m_read_file.return_value = file_resp 
+        m_read_file.return_value = file_resp
         m_os.environ.get.side_effect = lambda x,y: x
 
         # Call method
