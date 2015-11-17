@@ -834,16 +834,15 @@ def run_protected():
     if docker_id:
         configure_logger(logger=logger,
                          log_level=config[LOG_LEVEL_VAR],
+                         docker_id=str(docker_id)[:12],
                          log_format=DOCKER_ID_ROOT_LOG_FORMAT,
                          log_to_stdout=log_to_stdout)
         configure_logger(logger=pycalico_logger,
                          log_level=config[LOG_LEVEL_VAR],
+                         docker_id=str(docker_id)[:12],
                          log_format=DOCKER_ID_LOG_FORMAT,
                          log_to_stdout=log_to_stdout)
 
-        docker_filter = IdentityFilter(identity=str(docker_id)[:12])
-        logger.addFilter(docker_filter)
-        pycalico_logger.addFilter(docker_filter)
     else:
         configure_logger(logger=logger,
                          log_level=config[LOG_LEVEL_VAR],

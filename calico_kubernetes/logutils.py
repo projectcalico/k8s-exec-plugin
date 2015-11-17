@@ -11,7 +11,7 @@ LOG_FORMAT = '%(asctime)s %(process)d %(levelname)s %(filename)s: %(message)s'
 DOCKER_ID_LOG_FORMAT = '%(asctime)s %(process)d [%(identity)s] %(levelname)s %(filename)s: %(message)s'
 
 
-def configure_logger(logger, log_level, log_format=LOG_FORMAT, 
+def configure_logger(logger, log_level, docker_id=None, log_format=LOG_FORMAT,
                      log_to_stdout=True, log_dir=LOG_DIR):
     """
     Configures logging to the file 'calico.log' in the specified log directory
@@ -33,11 +33,14 @@ def configure_logger(logger, log_level, log_format=LOG_FORMAT,
         os.makedirs(log_dir)
 
     formatter = logging.Formatter(log_format)
+    docker_filter = IdentityFilter(identity=docker_id)
 
     file_hdlr = ConcurrentRotatingFileHandler(filename=log_dir+'calico.log',
                                               maxBytes=1000000,
                                               backupCount=5)
     file_hdlr.setFormatter(formatter)
+    if docker_id:
+        file_hdlr.addFilter(docker_filter)
 
     logger.addHandler(file_hdlr)
     logger.setLevel(log_level)
@@ -47,6 +50,8 @@ def configure_logger(logger, log_level, log_format=LOG_FORMAT,
         stdout_hdlr = logging.StreamHandler(sys.stdout)
         stdout_hdlr.setLevel(log_level)
         stdout_hdlr.setFormatter(formatter)
+        if docker_id:
+            stdout_hdlr.addFilter(docker_filter)
         logger.addHandler(stdout_hdlr)
 
 class IdentityFilter(logging.Filter):

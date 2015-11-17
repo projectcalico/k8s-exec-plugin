@@ -1205,6 +1205,7 @@ class NetworkPluginTest(unittest.TestCase):
 
         logutils.configure_logger(logger=m_log,
                                   log_level=logging.DEBUG,
+                                  docker_id="abcd1234",
                                   log_format="FORMAT",
                                   log_to_stdout=m_log_to_stdout,
                                   log_dir='/mock/')
