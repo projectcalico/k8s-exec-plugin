@@ -19,6 +19,7 @@ import requests
 import unittest
 import copy
 
+from logging import LogRecord
 from docker.errors import APIError
 from mock import patch, Mock, MagicMock, call
 from netaddr import IPAddress, IPNetwork
@@ -1224,6 +1225,14 @@ class NetworkPluginTest(unittest.TestCase):
         else:
             m_log.addHandler.assert_called_once_with(f_handler)
 
+    def test_filter(self):
+        """Test filter method for IdentityFilterClass"""
+        record = Mock(spec=LogRecord)
+        identity_filter = logutils.IdentityFilter("ID")
+        test_result = identity_filter.filter(record)
+
+        assert_equal(record.identity, "ID")
+        assert_true(test_result)
 
     def test_api_root_secure_true(self):
         """Test api_root_secure output for https
