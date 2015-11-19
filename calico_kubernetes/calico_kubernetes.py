@@ -824,34 +824,25 @@ def run_protected():
     # Get config from file / environment.
     config = load_config()
 
-    # Append a stdout logging handler to log to the Kubelet.
-    # We cannot do this in the status hook because the Kubelet looks to
-    # stdout for status results.
-    log_to_stdout = (mode != 'status')
-
     # Filter the logger to append the Docker ID to logs.
     # If docker_id is not supplied, do not include it in logger config.
     if docker_id:
         configure_logger(logger=logger,
                          log_level=config[LOG_LEVEL_VAR],
                          docker_id=str(docker_id)[:12],
-                         log_format=DOCKER_ID_ROOT_LOG_FORMAT,
-                         log_to_stdout=log_to_stdout)
+                         log_format=DOCKER_ID_ROOT_LOG_FORMAT)
         configure_logger(logger=pycalico_logger,
                          log_level=config[LOG_LEVEL_VAR],
                          docker_id=str(docker_id)[:12],
-                         log_format=DOCKER_ID_LOG_FORMAT,
-                         log_to_stdout=log_to_stdout)
+                         log_format=DOCKER_ID_LOG_FORMAT)
 
     else:
         configure_logger(logger=logger,
                          log_level=config[LOG_LEVEL_VAR],
-                         log_format=ROOT_LOG_FORMAT,
-                         log_to_stdout=log_to_stdout)
+                         log_format=ROOT_LOG_FORMAT)
         configure_logger(logger=pycalico_logger,
                          log_level=config[LOG_LEVEL_VAR],
-                         log_format=LOG_FORMAT,
-                         log_to_stdout=log_to_stdout)
+                         log_format=LOG_FORMAT)
 
     # Try to run the plugin, logging out any BaseExceptions raised.
     logger.debug("Begin Calico network plugin execution")
