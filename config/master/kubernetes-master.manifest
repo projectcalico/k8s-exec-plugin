@@ -36,7 +36,7 @@ spec:
         - mountPath: /var/lib/etcd
           name: "etcd-datadir"
     - name: "kube-apiserver"
-      image: "gcr.io/google_containers/hyperkube:v1.1.0-alpha.1"
+      image: "gcr.io/google_containers/hyperkube:v1.1.1"
       args: 
         - "/hyperkube" 
         - "apiserver"
@@ -51,13 +51,13 @@ spec:
         - mountPath: /var/run/kubernetes
           name: "var-run-kubernetes"
     - name: "kube-controller-manager"
-      image: "gcr.io/google_containers/hyperkube:v1.1.0-alpha.1"
+      image: "gcr.io/google_containers/hyperkube:v1.1.1"
       args: 
         - "/hyperkube"
         - "controller-manager"
         - "--master=http://127.0.0.1:8080"
     - name: "kube-scheduler"
-      image: "gcr.io/google_containers/hyperkube:v1.1.0-alpha.1"
+      image: "gcr.io/google_containers/hyperkube:v1.1.1"
       args:
         - "/hyperkube" 
         - "scheduler"
