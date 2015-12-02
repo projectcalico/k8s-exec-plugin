@@ -133,9 +133,14 @@ class NetworkPluginTest(unittest.TestCase):
         self.plugin._get_endpoint.return_value = endpoint
         self.plugin.default_policy = "ns_isolation"
 
-        # Mock so that first two profiles deleted, third does not exist.
-        side_effect = iter([None, None, KeyError])
-        self.plugin._datastore_client.remove_profile.side_effect = side_effect
+        # Mock so that first profile has members, second and third are empty.
+        # We'll only call remove_profile on the second and third profiles.
+        get_side_effect = iter([Mock(), None, None])
+        self.plugin._datastore_client.get_profile_members.side_effect = get_side_effect
+
+        # Mock so that second profile is deleted, last does not exist.
+        rm_side_effect = iter([None, KeyError])
+        self.plugin._datastore_client.remove_profile.side_effect = rm_side_effect
 
         # Set up args
         namespace = 'ns'
@@ -146,10 +151,36 @@ class NetworkPluginTest(unittest.TestCase):
         self.plugin.delete(namespace, pod_name, docker_id)
 
         # Assert expected output
+        expected_calls = [call(2), call(3)]
         m_container_remove.assert_called_once_with(m_get_endpoint())
+        assert_equal(self.plugin._datastore_client.remove_profile.mock_calls, expected_calls)
         assert_equal(namespace, self.plugin.namespace)
         assert_equal(pod_name, self.plugin.pod_name)
         assert_equal(docker_id, self.plugin.docker_id)
+
+    def test_delete_default_profile(self):
+        """Test Pod Deletion Hook with default profile"""
+        # Mock
+        m_container_remove = MagicMock(spec=self.plugin._container_remove)
+        self.plugin._container_remove = m_container_remove
+        m_get_endpoint = MagicMock(spec=self.plugin._get_endpoint)
+        endpoint = MagicMock()
+        endpoint.profile_ids = [calico_kubernetes.DEFAULT_PROFILE_NAME]
+        self.plugin._get_endpoint = m_get_endpoint
+        self.plugin._get_endpoint.return_value = endpoint
+        self.plugin.default_policy = "none"
+
+        # Set up args
+        namespace = 'ns'
+        pod_name = 'pod1'
+        docker_id = 123456789101112
+
+        # Call method under test
+        self.plugin.delete(namespace, pod_name, docker_id)
+
+        # Assert expected output
+        assert_false(self.plugin._datastore_client.remove_profile.called)
+        m_container_remove.assert_called_once_with(m_get_endpoint())
 
     def test_delete_no_endpoint(self):
         """Test Pod Deletion Hook when no endpoint exists"""
