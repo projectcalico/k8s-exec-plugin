@@ -88,6 +88,8 @@ class NetworkPluginTest(unittest.TestCase):
             endpoint = Mock()
             endpoint.endpoint_id = "12345abcd_endpoint_id"
             m_configure_interface.return_value = endpoint
+            m_validate_container_state = MagicMock(spec=self.plugin._validate_container_state)
+            self.plugin._validate_container_state = m_validate_container_state
 
             # Set up args
             namespace = 'ns'
@@ -102,6 +104,7 @@ class NetworkPluginTest(unittest.TestCase):
             assert_equal(namespace, self.plugin.namespace)
             assert_equal(pod_name, self.plugin.pod_name)
             assert_equal(docker_id, self.plugin.docker_id)
+            m_validate_container_state.assert_called_once_with(self.plugin.docker_id)
             m_configure_interface.assert_called_once_with()
             m_configure_profile.assert_called_once_with(endpoint)
 
@@ -357,9 +360,7 @@ class NetworkPluginTest(unittest.TestCase):
             assert_equal(return_val, endpoint)
 
     def test_container_add(self):
-        with patch_object(self.plugin, '_validate_container_state',
-                          autospec=True) as m_validate_container_state, \
-                patch('calico_kubernetes.calico_kubernetes.netns.PidNamespace', autospec=True) as m_pid_ns, \
+        with patch('calico_kubernetes.calico_kubernetes.netns.PidNamespace', autospec=True) as m_pid_ns, \
                 patch_object(self.plugin, '_assign_container_ip', autospec=True) as m_assign_ip:
             # Set up mock objs
             self.m_datastore_client.get_endpoint.side_effect = KeyError
@@ -387,7 +388,6 @@ class NetworkPluginTest(unittest.TestCase):
                 orchestrator_id=TEST_ORCH_ID,
                 workload_id=self.plugin.docker_id
             )
-            m_validate_container_state.assert_called_once_with(container_name)
             self.m_datastore_client.create_endpoint.assert_called_once_with(TEST_HOST,
                                                                             TEST_ORCH_ID,
                                                                             self.plugin.docker_id,

@@ -110,6 +110,10 @@ class NetworkPlugin(object):
         logger.info('Configuring pod %s/%s (container_id %s)',
                     self.namespace, self.pod_name, self.docker_id)
 
+        # Obtain information from Docker Client and validate container state.
+        # If validation fails, the plugin will exit.
+        self._validate_container_state(self.docker_id)
+
         try:
             endpoint = self._configure_interface()
             logger.info("Created Calico endpoint: %s", endpoint.endpoint_id)
@@ -341,9 +345,6 @@ class NetworkPlugin(object):
                          "with Calico Networking.")
             sys.exit(1)
 
-        # Obtain information from Docker Client and validate container state
-        self._validate_container_state(self.docker_id)
-
         ip_list = [self._assign_container_ip()]
 
         # Create Endpoint object
@@ -479,8 +480,9 @@ class NetworkPlugin(object):
 
         # We can't set up Calico if the container shares the host namespace.
         if info["HostConfig"]["NetworkMode"] == "host":
-            logger.warning("Calico cannot network container because "
-                           "it is running NetworkMode = host.")
+            logger.info("Cannot network container %s/%s because "
+                        "it is running NetworkMode = host.",
+                        self.namespace, self.pod_name)
             sys.exit(0)
 
     def _uses_host_networking(self, container_name):
