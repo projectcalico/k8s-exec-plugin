@@ -20,7 +20,7 @@ write_files:
         echo "Kubenetes not installed - installing."
 
         # Get the Kubernetes Release.
-        wget https://github.com/kubernetes/kubernetes/releases/download/v1.1.1/kubernetes.tar.gz
+        wget https://github.com/kubernetes/kubernetes/releases/download/v1.1.2/kubernetes.tar.gz
         
         # Extract the Kubernetes binaries.
         tar -xf kubernetes.tar.gz
