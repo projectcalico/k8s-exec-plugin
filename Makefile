@@ -46,13 +46,7 @@ dist/calicoctl:
 	curl -L http://www.projectcalico.org/latest/calicoctl -o dist/calicoctl
 	chmod +x dist/calicoctl
 
-run-kubernetes-master: run-etcd run-service-proxy binary dist/calicoctl kubectl
-	# Stop any existing kubelet that we started
-	-docker rm -f calico-kubelet-master
-
-	# Remove any pods that the old kubelet may have started.
-	-docker rm -f $$(docker ps | grep k8s_ | awk '{print $$1}')
-
+run-kubernetes-master: stop-kubernetes-master run-etcd run-service-proxy binary dist/calicoctl kubectl
 	# Run the kubelet which will launch the master components in a pod.
 	docker run \
 	--name calico-kubelet-master \
@@ -74,9 +68,16 @@ run-kubernetes-master: run-etcd run-service-proxy binary dist/calicoctl kubectl
 	# Start the calico node
 	sudo dist/calicoctl node
 
-run-service-proxy:
-	-docker rm -f calico-service-proxy
-	docker run --name calico-service-proxy -d --net=host --privileged gcr.io/google_containers/hyperkube:v$(K8S_VERSION) /hyperkube proxy --master=http://127.0.0.1:8080 --v=2
+stop-kubernetes-master:
+	# Stop any existing kubelet that we started
+	-docker rm -f calico-kubelet-master
+
+	# Remove any pods that the old kubelet may have started.
+	-docker rm -f $$(docker ps | grep k8s_ | awk '{print $$1}')
+
+run-kube-proxy:
+	-docker rm -f calico-kube-proxy
+	docker run --name calico-kube-proxy -d --net=host --privileged gcr.io/google_containers/hyperkube:v$(K8S_VERSION) /hyperkube proxy --master=http://127.0.0.1:8080 --v=2
 
 kubectl:
 	wget http://storage.googleapis.com/kubernetes-release/release/v$(K8S_VERSION)/bin/linux/amd64/kubectl
