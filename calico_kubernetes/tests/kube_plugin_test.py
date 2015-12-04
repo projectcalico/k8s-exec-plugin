@@ -114,6 +114,7 @@ class NetworkPluginTest(unittest.TestCase):
                           autospec=True) as m_configure_interface:
             # Set up mock objects
             m_configure_interface.side_effect = CalledProcessError(1,'','')
+            self.plugin.delete = MagicMock(spec=self.plugin.delete)
 
             # Set up args
             namespace = 'ns'
@@ -121,14 +122,14 @@ class NetworkPluginTest(unittest.TestCase):
             docker_id = 13
 
             # Call method under test
-            assert_raises(
-                SystemExit, self.plugin.create, namespace, pod_name, docker_id)
+            assert_raises(SystemExit, self.plugin.create, namespace, pod_name, docker_id)
+            self.plugin.delete.assert_called_once_with(namespace, pod_name, docker_id)
 
     def test_delete(self):
         """Test Pod Deletion Hook"""
         # Mock
-        m_container_remove = MagicMock(spec=self.plugin._container_remove)
-        self.plugin._container_remove = m_container_remove
+        m_remove_endpoint = MagicMock(spec=self.plugin._remove_endpoint)
+        self.plugin._remove_endpoint = m_remove_endpoint
         m_get_endpoint = MagicMock(spec=self.plugin._get_endpoint)
         endpoint = MagicMock()
         endpoint.profile_ids = [1, 2, 3]
@@ -155,7 +156,7 @@ class NetworkPluginTest(unittest.TestCase):
 
         # Assert expected output
         expected_calls = [call(2), call(3)]
-        m_container_remove.assert_called_once_with(m_get_endpoint())
+        m_remove_endpoint.assert_called_once_with(m_get_endpoint())
         assert_equal(self.plugin._datastore_client.remove_profile.mock_calls, expected_calls)
         assert_equal(namespace, self.plugin.namespace)
         assert_equal(pod_name, self.plugin.pod_name)
@@ -164,8 +165,8 @@ class NetworkPluginTest(unittest.TestCase):
     def test_delete_default_profile(self):
         """Test Pod Deletion Hook with default profile"""
         # Mock
-        m_container_remove = MagicMock(spec=self.plugin._container_remove)
-        self.plugin._container_remove = m_container_remove
+        m_remove_endpoint = MagicMock(spec=self.plugin._remove_endpoint)
+        self.plugin._remove_endpoint = m_remove_endpoint
         m_get_endpoint = MagicMock(spec=self.plugin._get_endpoint)
         endpoint = MagicMock()
         endpoint.profile_ids = [calico_kubernetes.DEFAULT_PROFILE_NAME]
@@ -183,13 +184,13 @@ class NetworkPluginTest(unittest.TestCase):
 
         # Assert expected output
         assert_false(self.plugin._datastore_client.remove_profile.called)
-        m_container_remove.assert_called_once_with(m_get_endpoint())
+        m_remove_endpoint.assert_called_once_with(m_get_endpoint())
 
     def test_delete_no_endpoint(self):
         """Test Pod Deletion Hook when no endpoint exists"""
         # Mock
-        m_container_remove = MagicMock(spec=self.plugin._container_remove)
-        self.plugin._container_remove = m_container_remove
+        m_remove_endpoint = MagicMock(spec=self.plugin._remove_endpoint)
+        self.plugin._remove_endpoint = m_remove_endpoint
         m_get_endpoint = MagicMock(spec=self.plugin._get_endpoint)
         self.plugin._get_endpoint = m_get_endpoint
         self.plugin._get_endpoint.return_value = None
@@ -209,7 +210,7 @@ class NetworkPluginTest(unittest.TestCase):
         the profile is not in the datastore. In this instance, Calico
         should Issue warning log, but delete() will not fail.
         """
-        with patch_object(self.plugin, '_container_remove', autospec=True) as m_container_remove:
+        with patch_object(self.plugin, '_remove_endpoint', autospec=True) as m_remove_endpoint:
             # Set up mock obj
             self.m_datastore_client.remove_profile.side_effect = KeyError
 
@@ -319,8 +320,8 @@ class NetworkPluginTest(unittest.TestCase):
                 patch_object(self.plugin, '_get_container_pid', autospec=True) as m_get_container_pid, \
                 patch_object(self.plugin, '_delete_docker_interface',
                              autospec=True) as m_delete_docker_interface, \
-                patch_object(self.plugin, '_container_add',
-                             autospec=True) as m_container_add, \
+                patch_object(self.plugin, '_create_endpoint',
+                             autospec=True) as m_create_endpoint, \
                 patch_object(calico_kubernetes, 'generate_cali_interface_name',
                              autospec=True) as m_generate_cali_interface_name, \
                 patch_object(self.plugin, '_get_node_ip',
@@ -335,7 +336,7 @@ class NetworkPluginTest(unittest.TestCase):
             m_read_docker_ip.return_value = IPAddress('1.1.1.1')
             endpoint = Endpoint(TEST_HOST, TEST_ORCH_ID, '1234', '5678',
                                 'active', 'mac')
-            m_container_add.return_value = endpoint
+            m_create_endpoint.return_value = endpoint
             m_generate_cali_interface_name.return_value = 'interface_name'
             m_get_node_ip.return_value = '1.2.3.4'
 
@@ -350,7 +351,7 @@ class NetworkPluginTest(unittest.TestCase):
             # Assert expected calls
             m_get_container_pid.assert_called_once_with(container_name)
             m_delete_docker_interface.assert_called_once_with()
-            m_container_add.assert_called_once_with('container_pid', 'eth0')
+            m_create_endpoint.assert_called_once_with('container_pid')
             m_generate_cali_interface_name.assert_called_once_with(
                 IF_PREFIX, endpoint.endpoint_id)
             m_get_node_ip.assert_called_once_with()
@@ -359,7 +360,7 @@ class NetworkPluginTest(unittest.TestCase):
                  'dev', 'interface_name'])
             assert_equal(return_val, endpoint)
 
-    def test_container_add(self):
+    def test_create_endpoint(self):
         with patch('calico_kubernetes.calico_kubernetes.netns.PidNamespace', autospec=True) as m_pid_ns, \
                 patch_object(self.plugin, '_assign_container_ip', autospec=True) as m_assign_ip:
             # Set up mock objs
@@ -375,12 +376,11 @@ class NetworkPluginTest(unittest.TestCase):
             self.plugin.docker_id = container_name
             pid = 'pid'
             ip = IPAddress('1.1.1.1')
-            interface = 'eth0'
 
             m_assign_ip.return_value = ip
 
             # Call method under test
-            return_value = self.plugin._container_add(pid, interface)
+            return_value = self.plugin._create_endpoint(pid)
 
             # Assert call parameters
             self.m_datastore_client.get_endpoint.assert_called_once_with(
@@ -395,16 +395,16 @@ class NetworkPluginTest(unittest.TestCase):
             self.m_datastore_client.set_endpoint.assert_called_once_with(
                 endpoint)
             endpoint.provision_veth.assert_called_once_with(
-                m_pid_ns(pid), interface)
+                m_pid_ns(pid), "eth0")
 
             # Verify method output
             assert_equal(endpoint.mac, 'new_mac')
             assert_equal(return_value, endpoint)
 
-    def test_container_add_create_error(self):
-        """Test Endpoint Creation Error in _container_add
+    def test_create_endpoint_create_error(self):
+        """Test Endpoint Creation Error in _create_endpoint
 
-        _container_add should release ips and exit when endpoint creation fails.
+        _create_endpoint should release ips and exit when endpoint creation fails.
         """
         with patch_object(self.plugin, '_validate_container_state', autospec=True) as m_validate, \
                 patch_object(self.plugin, '_assign_container_ip', autospec=True) as m_assign_ip:
@@ -416,34 +416,28 @@ class NetworkPluginTest(unittest.TestCase):
             # Set up arguments
             pid = 'pid'
             ip = IPAddress('1.1.1.1')
-            interface = 'eth0'
             m_assign_ip.return_value = ip
 
-            assert_raises(
-                SystemExit, self.plugin._container_add, pid, interface)
+            assert_raises(SystemExit, self.plugin._create_endpoint, pid)
 
             # Assert
-            self.m_datastore_client.release_ips.assert_called_once_with(
-                set([ip]))
+            self.m_datastore_client.release_ips.assert_called_once_with(set([ip]))
             assert_false(self.m_datastore_client.set_endpoint.called)
 
-
-    def test_container_add_container_exists(self):
+    def test_create_endpoint_container_exists(self):
         """
-        Test _container_add method when container already exists.
+        Test _create_endpoint method when container already exists.
 
         Expect system exit.
         """
         # Set up arguments
         pid = 'pid'
-        interface = 'eth0'
 
         # Call method under test
-        assert_raises(
-            SystemExit, self.plugin._container_add, pid, interface)
+        assert_raises(SystemExit, self.plugin._create_endpoint, pid)
 
     @patch('calico_kubernetes.calico_kubernetes.netns.remove_veth', autospec=True)
-    def test_container_remove(self, m_remove_veth):
+    def test_remove_endpoint(self, m_remove_veth):
         # Set up mock objs
         endpoint = Endpoint(TEST_HOST, TEST_ORCH_ID, '1234', '5678',
                             'active', 'mac')
@@ -459,12 +453,12 @@ class NetworkPluginTest(unittest.TestCase):
         orchestrator_id = TEST_ORCH_ID
 
         # Call method under test
-        self.plugin._container_remove(endpoint)
+        self.plugin._remove_endpoint(endpoint)
 
         m_remove_veth.assert_called_once_with(endpoint.name)
 
     @patch('calico_kubernetes.calico_kubernetes.netns.remove_veth', autospec=True)
-    def test_container_remove_with_exceptions(self, m_remove_veth):
+    def test_remove_endpoint_with_exceptions(self, m_remove_veth):
         """Test Container Remove Exception Handling
 
         Failures in remove_veth and remove_workload should gently raise exceptions without exit.
@@ -473,7 +467,7 @@ class NetworkPluginTest(unittest.TestCase):
         m_remove_veth.side_effect = CalledProcessError(1, '', '')
         self.m_datastore_client.remove_workload.side_effect = KeyError
 
-        self.plugin._container_remove(MagicMock())
+        self.plugin._remove_endpoint(MagicMock())
 
     def test_validate_container_state(self):
         with patch_object(self.plugin, '_get_container_info', autospec=True) as m_get_container_info:
