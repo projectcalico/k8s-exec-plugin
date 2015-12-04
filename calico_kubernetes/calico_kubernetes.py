@@ -424,11 +424,19 @@ class NetworkPlugin(object):
             try:
                 ipv4s, ipv6s = self._datastore_client.auto_assign_ips(1, 0,
                                                         self.docker_id, None)
-                ip = ipv4s[0]
                 logger.debug("IPAM assigned ipv4=%s; ipv6= %s", ipv4s, ipv6s)
             except RuntimeError as err:
-                logger.error("Cannot auto assign IPAddress: %s", err.message)
+                logger.error("Cannot auto assign IP address: %s", err.message)
                 sys.exit(1)
+
+            # Check to make sure an address was assigned.
+            if not ipv4s:
+                logger.error("Unable to assign an IP address - exiting")
+                sys.exit(1)
+
+            # Get the address.
+            ip = ipv4s[0]
+
         else:
             logger.info("Using docker assigned IP address")
             ip = self._read_docker_ip()

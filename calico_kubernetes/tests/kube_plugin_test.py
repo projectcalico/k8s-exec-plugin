@@ -125,6 +125,27 @@ class NetworkPluginTest(unittest.TestCase):
             assert_raises(SystemExit, self.plugin.create, namespace, pod_name, docker_id)
             self.plugin.delete.assert_called_once_with(namespace, pod_name, docker_id)
 
+    def test_create_error_delete_error(self):
+        """Test Error in Pod Creation Hook Failure
+        Tests that we handle errors when cleaning up gracefully.
+        """
+        with patch_object(self.plugin, '_configure_interface',
+                          autospec=True) as m_configure_interface:
+            # Set up mock objects
+            m_configure_interface.side_effect = CalledProcessError(1,'','')
+            self.plugin.delete = MagicMock(spec=self.plugin.delete)
+            self.plugin.delete.side_effect = KeyError
+
+            # Set up args
+            namespace = 'ns'
+            pod_name = 'pod1'
+            docker_id = 13
+
+            # Call method under test
+            assert_raises(SystemExit, self.plugin.create, namespace, pod_name, docker_id)
+            self.plugin.delete.assert_called_once_with(namespace, pod_name, docker_id)
+
+
     def test_delete(self):
         """Test Pod Deletion Hook"""
         # Mock
@@ -643,7 +664,6 @@ class NetworkPluginTest(unittest.TestCase):
         assert_equal(ip, 1)
 
     def test_assign_container_ipam_error(self):
-        # Don't use CALICO_IPAM for this test.
         """Test assign_container_ip IPAM auto assign failure
 
         Assert SystemExit when datastore client fails to allocate IP
@@ -653,6 +673,17 @@ class NetworkPluginTest(unittest.TestCase):
         # Mock the Docker IP
         self.plugin.docker_id = "docker_id"
         self.m_datastore_client.auto_assign_ips.side_effect = RuntimeError
+
+        # Run method under test
+        assert_raises(SystemExit, self.plugin._assign_container_ip)
+
+    def test_assign_container_ipam_error_no_ips(self):
+        """Test assign_container_ip auto_assign no IPs left"""
+        calico_kubernetes.CALICO_IPAM = "true"
+
+        # Mock the Docker IP
+        self.plugin.docker_id = "docker_id"
+        self.m_datastore_client.auto_assign_ips.return_value = [], [] 
 
         # Run method under test
         assert_raises(SystemExit, self.plugin._assign_container_ip)
