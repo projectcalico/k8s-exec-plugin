@@ -121,7 +121,7 @@ class NetworkPlugin(object):
         except BaseException:
             # Check to see if an endpoint has been created.  If so,
             # we need to tear down any state we may have created.
-            logger.error("Error networking pod - cleaning up")
+            logger.exception("Error networking pod - cleaning up")
 
             try:
                 self.delete(namespace, pod_name, docker_id)
@@ -131,7 +131,8 @@ class NetworkPlugin(object):
                 logger.exception("Error cleaning up pod")
 
             # We've torn down, now re-raise the Exception.
-            raise
+            logger.info("Done cleaning up")
+            sys.exit(1)
         else:
             logger.info("Successfully configured networking for pod %s/%s",
                         self.namespace, self.pod_name)
@@ -362,9 +363,6 @@ class NetworkPlugin(object):
 
         Returns the created libcalico Endpoint object.
         """
-        # Interface name to be used.
-        interface = "eth0"
-
         # Check if the container already exists. If it does, exit.
         if self._get_endpoint():
             logger.error("This container has already been configured "
@@ -390,9 +388,8 @@ class NetworkPlugin(object):
 
         # Create the veth, move into the container namespace, add the IP and
         # set up the default routes.
-        logger.debug("Creating the veth with namespace pid %s on interface "
-                     "name %s", pid, interface)
-        ep.mac = ep.provision_veth(netns.PidNamespace(pid), interface)
+        logger.debug("Creating eth0 in network namespace with pid=%s", pid) 
+        ep.mac = ep.provision_veth(netns.PidNamespace(pid), "eth0")
 
         logger.debug("Setting mac address %s on endpoint %s", ep.mac, ep.name)
         self._datastore_client.set_endpoint(ep)
@@ -472,7 +469,7 @@ class NetworkPlugin(object):
 
     def _remove_endpoint(self, endpoint):
         """
-        Remove the provided endpoint on this host from Calico networking
+        Remove the provided endpoint on this host from Calico networking.
         - Removes any IP address assignments.
         - Removes the veth interface for this endpoint.
         - Removes the endpoint object from etcd.
