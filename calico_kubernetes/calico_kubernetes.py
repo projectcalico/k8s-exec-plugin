@@ -118,12 +118,23 @@ class NetworkPlugin(object):
             endpoint = self._configure_interface()
             logger.info("Created Calico endpoint: %s", endpoint.endpoint_id)
             self._configure_profile(endpoint)
-        except CalledProcessError as e:
-            logger.error('Error code %d creating pod networking: %s\n%s',
-                         e.returncode, e.output, e)
-            sys.exit(1)
-        logger.info("Successfully configured networking for pod %s/%s",
-                    self.namespace, self.pod_name)
+        except BaseException:
+            # Check to see if an endpoint has been created.  If so,
+            # we need to tear down any state we may have created.
+            logger.error("Error networking pod - cleaning up")
+
+            try:
+                self.delete(namespace, pod_name, docker_id)
+            except:
+                # Catch all errors tearing down the pod - this
+                # is best-effort.
+                logger.exception("Error cleaning up pod")
+
+            # We've torn down, now re-raise the Exception.
+            raise
+        else:
+            logger.info("Successfully configured networking for pod %s/%s",
+                        self.namespace, self.pod_name)
 
     def delete(self, namespace, pod_name, docker_id):
         """Cleanup after a pod."""
@@ -141,13 +152,22 @@ class NetworkPlugin(object):
             sys.exit(0)
         logger.debug("Pod has Calico endpoint %s", endpoint.endpoint_id)
 
-        # Remove the container.
-        self._container_remove(endpoint)
+        # Remove the endpoint and its configuration.
+        self._remove_endpoint(endpoint)
 
-        # If the pod has any profiles, delete them unless they are the 
-        # default profile or have other members.  We can do this because 
-        # we create a profile per pod. Profile management for namespaces
-        # and service based policy will need to be done differently.
+        # Remove any profiles.
+        self._remove_profiles(endpoint)
+
+        logger.info("Successfully removed networking for pod %s/%s",
+                    self.namespace, self.pod_name)
+
+    def _remove_profiles(self, endpoint):
+        """
+        If the pod has any profiles, delete them unless they are the 
+        default profile or have other members.  We can do this because 
+        we create a profile per pod. Profile management for namespaces
+        and service based policy will need to be done differently.
+        """
         logger.debug("Endpoint has profiles: %s", endpoint.profile_ids)
         for profile_id in endpoint.profile_ids:
             if profile_id == DEFAULT_PROFILE_NAME:
@@ -165,8 +185,7 @@ class NetworkPlugin(object):
             except KeyError:
                 logger.warning("Cannot remove profile %s; Profile cannot "
                                "be found.", profile_id)
-        logger.info("Successfully removed networking for pod %s/%s",
-                    self.namespace, self.pod_name)
+
 
     def _get_endpoint(self):
         """
@@ -304,13 +323,12 @@ class NetworkPlugin(object):
         4) Assign the node's IP to the host end of the veth pair (required for
            compatibility with kube-proxy REDIRECT iptables rules).
         """
-        # Set up parameters
+        # Get container's PID.
         container_pid = self._get_container_pid(self.docker_id)
-        interface = 'eth0'
 
         self._delete_docker_interface()
         logger.info('Configuring Calico network interface')
-        ep = self._container_add(container_pid, interface)
+        ep = self._create_endpoint(container_pid)
 
         # Log our container's interfaces after adding the new interface.
         _log_interfaces(container_pid)
@@ -335,10 +353,18 @@ class NetworkPlugin(object):
         logger.info('Finished configuring network interface')
         return ep
 
-    def _container_add(self, pid, interface):
+    def _create_endpoint(self, pid):
         """
-        Add a container (on this host) to Calico networking with the given IP.
+        Creates a Calico endpoint for this pod.
+        - Assigns an IP address for this pod.
+        - Creates the Calico endpoint object in the datastore.
+        - Provisions the Calico veth pair for this pod.
+
+        Returns the created libcalico Endpoint object.
         """
+        # Interface name to be used.
+        interface = "eth0"
+
         # Check if the container already exists. If it does, exit.
         if self._get_endpoint():
             logger.error("This container has already been configured "
@@ -355,6 +381,8 @@ class NetworkPlugin(object):
                                                         self.docker_id,
                                                         ip_list)
         except (AddrFormatError, KeyError):
+            # We failed to create the endpoint - we must release the IPs
+            # that we assigned for this endpoint or else they will leak.
             logger.exception("Failed to create endpoint with IPs %s. "
                              "Unassigning IP address, then exiting.", ip_list)
             self._datastore_client.release_ips(set(ip_list))
@@ -366,7 +394,7 @@ class NetworkPlugin(object):
                      "name %s", pid, interface)
         ep.mac = ep.provision_veth(netns.PidNamespace(pid), interface)
 
-        logger.debug("Setting mac address %s to endpoint %s", ep.mac, ep.name)
+        logger.debug("Setting mac address %s on endpoint %s", ep.mac, ep.name)
         self._datastore_client.set_endpoint(ep)
 
         # Let the caller know what endpoint was created.
@@ -442,9 +470,12 @@ class NetworkPlugin(object):
                 _assign(ip)
         return ip
 
-    def _container_remove(self, endpoint):
+    def _remove_endpoint(self, endpoint):
         """
-        Remove the indicated container on this host from Calico networking
+        Remove the provided endpoint on this host from Calico networking
+        - Removes any IP address assignments.
+        - Removes the veth interface for this endpoint.
+        - Removes the endpoint object from etcd.
         """
         # Remove any IP address assignments that this endpoint has
         ip_set = set()
@@ -462,7 +493,7 @@ class NetworkPlugin(object):
             logger.exception("Could not remove veth interface from "
                              "endpoint %s", endpoint.name)
 
-        # Remove the container/endpoint from the datastore.
+        # Remove endpoint from the datastore.
         try:
             self._datastore_client.remove_workload(
                 HOSTNAME, ORCHESTRATOR_ID, self.docker_id)
