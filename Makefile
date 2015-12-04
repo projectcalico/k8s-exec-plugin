@@ -14,14 +14,15 @@ dist/calico_kubernetes: $(SRCFILES)
 	# Build the kubernetes plugin
 	docker run \
 	-u user \
-	-v `pwd`:/code \
+	-v `pwd`/dist:/code/dist \
+	-v `pwd`/calico_kubernetes:/code/calico_kubernetes \
 	calico/build pyinstaller calico_kubernetes/calico_kubernetes.py -a -F -s --clean
 
 ut:
-	docker run --rm -v `pwd`:/code \
-	calico/test sh -c \
-	'pip install ConcurrentLogHandler && \
-	nosetests calico_kubernetes/tests -c nose.cfg'
+	docker run --rm -v `pwd`/calico_kubernetes:/code/calico_kubernetes \
+	-v `pwd`/calico_kubernetes/nose.cfg:/code/nose.cfg \
+	calico/test \
+	nosetests calico_kubernetes/tests -c nose.cfg
 
 # UT runs on Cicle
 ut-circle: binary
@@ -32,8 +33,7 @@ ut-circle: binary
 	-v $(CIRCLE_TEST_REPORTS):/circle_output \
 	-e COVERALLS_REPO_TOKEN=$(COVERALLS_REPO_TOKEN) \
 	calico/test sh -c \
-	'pip install ConcurrentLogHandler && \
-	nosetests calico_kubernetes/tests -c nose.cfg \
+	'	nosetests calico_kubernetes/tests -c nose.cfg \
 	--with-xunit --xunit-file=/circle_output/output.xml; RC=$$?;\
 	[[ ! -z "$$COVERALLS_REPO_TOKEN" ]] && coveralls || true; exit $$RC'
 
