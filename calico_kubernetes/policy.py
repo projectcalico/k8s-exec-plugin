@@ -59,7 +59,7 @@ class PolicyParser(object):
         try:
             args = docopt.docopt(__doc__, argv=splits)
         except docopt.DocoptExit:
-            raise PolicyParseError("Failed to parse policy: %s", policy)
+            raise ValueError("Failed to parse policy: %s", policy)
 
         # Generate a rule object from the arguments.
         rule = self._generate_rule(args)
@@ -98,33 +98,23 @@ class PolicyParser(object):
         if protocol:
             rule_args["protocol"] = protocol
         if src_ports:
-            rule_args["src_ports"] = self._validate_ports(src_ports)
+            rule_args["src_ports"] = [s.strip() for s in src_ports.split(",")]
         if dst_ports:
-            rule_args["dst_ports"] = self._validate_ports(dst_ports)
+            rule_args["dst_ports"] = [s.strip() for s in dst_ports.split(",")]
         if icmp_type:
-            rule_args["icmp_type"] = self._validate_int(icmp_type)
+            rule_args["icmp_type"] = icmp_type
         if icmp_code:
-            rule_args["icmp_code"] = self._validate_int(icmp_code)
+            rule_args["icmp_code"] = icmp_code
         if src_net:
-            rule_args["src_net"] = self._validate_ip(src_net)
+            rule_args["src_net"] = src_net
         if src_label:
             rule_args["src_tag"] = self._validate_label(src_label)
         if dst_net:
-            rule_args["dst_net"] = self._validate_ip(dst_net)
+            rule_args["dst_net"] = dst_net
         if dst_label:
             rule_args["dst_tag"] = self._validate_label(dst_label)
 
         return Rule(**rule_args)
-
-    def _validate_int(self, value):
-        """
-        Validates the given value can be parsed as an int.
-        TODO: Move validation code into libcalico
-        """
-        try:
-            return int(value)
-        except ValueError:
-            raise PolicyParseError("Failed to parse %s, expecting int", value)
 
     def _validate_label(self, value):
         """
@@ -132,39 +122,11 @@ class PolicyParser(object):
         """
         match = LABEL_REG.search(value)
         if not match:
-            raise PolicyParseError("Failed to parse %s, expecting "
-                                   "label of form X=Y", value)
+            raise ValueError("Failed to parse %s, expecting "
+                             "label of form X=Y", value)
         k, v = match.groups()
         tag = self._label_to_tag(k, v)
         return tag
-    
-    
-    def _validate_ip(self, value):
-        """
-        Validates the given IP string.
-        :param value: IP address or network as a string.
-        :return: IPNetwork representation of the given address.
-        TODO: Move validation code into libcalico
-        """
-        try:
-            return IPNetwork(value)
-        except AddrFormatError:
-            raise PolicyParseError("Failed to parse %s, expecting IPNetwork",
-                                   value)
-
-    def _validate_ports(self, value):
-        """
-        Validates the given ports string to ensure all ports are integers,
-        returns the ports as a list of ints.
-        :param value: Port string.  E.g. "80,8001"
-        :return: List of ports.  E.g [80, 8001]
-        """
-        try:
-            ports = [int(p) for p in value.split(",")]
-            return ports
-        except ValueError:
-            raise PolicyParseError("Failed to parse %s as ports - "
-                                   "must be integers.", value)
 
     def _escape_chars(self, unescaped_string):
             """
@@ -180,8 +142,7 @@ class PolicyParser(object):
     
             # Substitute all invalid chars.
             return re.sub('[^a-zA-Z0-9\.\_\-]', swap_char, unescaped_string)
-    
-    
+
     def _label_to_tag(self, label_key, label_value):
             """
             Labels are key-value pairs, tags are single strings. This function
@@ -200,7 +161,3 @@ class PolicyParser(object):
             tag = '%s/%s' % (self.namespace, tag)
             tag = self._escape_chars(tag)
             return tag
-
-
-class PolicyParseError(Exception):
-    pass

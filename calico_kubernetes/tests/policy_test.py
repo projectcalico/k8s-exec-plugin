@@ -14,9 +14,9 @@
 import unittest
 from netaddr import IPNetwork
 from calico_kubernetes import policy
-from calico_kubernetes.policy import PolicyParseError
 from nose.tools import assert_equal, assert_raises
 from nose_parameterized import parameterized
+from netaddr import AddrFormatError
 
 
 class PolicyParserTest(unittest.TestCase):
@@ -71,9 +71,9 @@ class PolicyParserTest(unittest.TestCase):
         # assert on the result
         assert_equal(parsed['action'], "allow")
         assert_equal(parsed['protocol'], "udp")
-        assert_equal(parsed['src_ports'], [443])
+        assert_equal(parsed['src_ports'], ['443'])
         assert_equal(parsed['src_net'], IPNetwork("1.2.3.4/32"))
-        assert_equal(parsed['dst_ports'], [80, 90, 100])
+        assert_equal(parsed['dst_ports'], ['80', '90', '100'])
 
         # Again
         rule = "allow udp to cidr 1.2.0.0/16"
@@ -97,7 +97,7 @@ class PolicyParserTest(unittest.TestCase):
         assert_equal(parsed['action'], "allow")
         assert_equal(parsed['protocol'], "tcp")
         assert_equal(parsed['src_tag'], expected_tag)
-        assert_equal(parsed['dst_ports'], [80, 90, 100])
+        assert_equal(parsed['dst_ports'], ['80', '90', '100'])
 
         # Try again with a destination label.
         rule = "allow tcp to ports 80,90,100 label test=label"
@@ -110,7 +110,7 @@ class PolicyParserTest(unittest.TestCase):
         assert_equal(parsed['action'], "allow")
         assert_equal(parsed['protocol'], "tcp")
         assert_equal(parsed['dst_tag'], expected_tag)
-        assert_equal(parsed['dst_ports'], [80, 90, 100])
+        assert_equal(parsed['dst_ports'], ['80', '90', '100'])
 
     def test_parse_icmp_rule(self):
         rule = "allow icmp type 8 code 2 from label A=B to cidr 1.2.0.0/16"
@@ -122,8 +122,8 @@ class PolicyParserTest(unittest.TestCase):
         expected_tag = "%s_A_B" % self.namespace
         assert_equal(parsed['action'], "allow")
         assert_equal(parsed['protocol'], "icmp")
-        assert_equal(parsed['icmp_type'], 8)
-        assert_equal(parsed['icmp_code'], 2)
+        assert_equal(parsed['icmp_type'], '8')
+        assert_equal(parsed['icmp_code'], '2')
         assert_equal(parsed['src_tag'], expected_tag)
         assert_equal(parsed['dst_net'], IPNetwork("1.2.0.0/16"))
 
@@ -135,7 +135,7 @@ class PolicyParserTest(unittest.TestCase):
         # Assert on the result
         assert_equal(parsed['action'], "allow")
         assert_equal(parsed['protocol'], "icmp")
-        assert_equal(parsed['icmp_type'], 8)
+        assert_equal(parsed['icmp_type'], '8')
         assert_equal(parsed['src_net'], IPNetwork("1.2.0.0/16"))
 
     @parameterized.expand([
@@ -144,7 +144,6 @@ class PolicyParserTest(unittest.TestCase):
         ("allow tcp from label test_label to ports 80,90,100"),
         ("allow tcp from udp ports 80,90,100"),
         ("reject tcp from ports 1"),
-        ("allow from cidr 172.24.500.1"),
         ("allow udp to ports 80 from label A=B"),
         ("allow udp to ports 80,Y,100"),
         (""),
@@ -156,7 +155,12 @@ class PolicyParserTest(unittest.TestCase):
     def test_parse_errors(self, rule):
         """Test invalid policy statements"""
         # Use tag instead of label
-        assert_raises(PolicyParseError, self.parser.parse_line, rule)
+        assert_raises(ValueError, self.parser.parse_line, rule)
+
+    def test_parse_cidr_error(self):
+        """Test invalid cidr policy statement"""
+        assert_raises(AddrFormatError, self.parser.parse_line,
+                      "allow from cidr 172.24.500.1")
 
     @parameterized.expand([
         ("some=invalid=label"),
@@ -167,5 +171,5 @@ class PolicyParserTest(unittest.TestCase):
     ])
     def test_validate_label_failed(self, label):
         """Test invalid label validation"""
-        # Each should raise a PolicyParseError
-        assert_raises(PolicyParseError, self.parser._validate_label, label)
+        # Each should raise a ValueError
+        assert_raises(ValueError, self.parser._validate_label, label)
