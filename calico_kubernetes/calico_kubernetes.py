@@ -125,7 +125,7 @@ class NetworkPlugin(object):
 
             try:
                 self.delete(namespace, pod_name, docker_id)
-            except:
+            except BaseException:
                 # Catch all errors tearing down the pod - this
                 # is best-effort.
                 logger.exception("Error cleaning up pod")
@@ -511,12 +511,12 @@ class NetworkPlugin(object):
 
         # Check the container is actually running.
         if not info["State"]["Running"]:
-            logger.error("The container is not currently running.")
+            logger.error("The infra container is not currently running.")
             sys.exit(1)
 
         # We can't set up Calico if the container shares the host namespace.
         if info["HostConfig"]["NetworkMode"] == "host":
-            logger.info("Cannot network container %s/%s because "
+            logger.info("Skipping pod %s/%s because "
                         "it is running NetworkMode = host.",
                         self.namespace, self.pod_name)
             sys.exit(0)
