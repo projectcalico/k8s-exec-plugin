@@ -16,6 +16,7 @@ dist/calico: $(SRCFILES)
 	# Stop the master kubelet since if it's running it holds a lock on the file
 	-docker stop calico-kubelet-master
 	# Build the kubernetes plugin
+	docker pull calico/build:latest
 	docker run \
 	-u user \
 	-v `pwd`/dist:/code/dist \
