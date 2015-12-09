@@ -130,7 +130,7 @@ class NetworkPlugin(object):
                 # is best-effort.
                 logger.exception("Error cleaning up pod")
 
-            # We've torn down, now re-raise the Exception.
+            # We've torn down, exit. 
             logger.info("Done cleaning up")
             sys.exit(1)
         else:
