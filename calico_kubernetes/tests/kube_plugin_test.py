@@ -25,7 +25,7 @@ from mock import patch, Mock, MagicMock, call
 from netaddr import IPAddress, IPNetwork
 from nose.tools import assert_equal, assert_true, assert_false, assert_raises
 from nose_parameterized import parameterized
-from subprocess import CalledProcessError
+from subprocess32 import CalledProcessError
 
 from calico_kubernetes import calico_kubernetes, logutils, policy
 from pycalico.block import AlreadyAssignedError

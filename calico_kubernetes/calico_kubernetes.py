@@ -30,7 +30,7 @@ from docker.errors import APIError
 
 from netaddr import IPAddress, IPNetwork, AddrFormatError
 from policy import PolicyParser
-from subprocess import check_output, CalledProcessError, check_call
+from subprocess32 import check_output, CalledProcessError, check_call
 
 import pycalico
 from pycalico import netns
@@ -503,7 +503,7 @@ class NetworkPlugin(object):
             self._datastore_client.remove_workload(
                 HOSTNAME, ORCHESTRATOR_ID, self.docker_id)
         except KeyError:
-            logger.exception("Failed to remove workload.")
+            logger.exception("Error removing workload.")
         logger.info("Removed Calico endpoint %s", endpoint.endpoint_id)
 
     def _validate_container_state(self, container_name):
