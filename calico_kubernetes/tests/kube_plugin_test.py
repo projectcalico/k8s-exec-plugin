@@ -39,7 +39,11 @@ from calico_kubernetes.calico_kubernetes import (KUBE_API_ROOT_VAR,
                                                  KUBE_AUTH_TOKEN_VAR,
                                                  ETCD_AUTHORITY_VAR,
                                                  LOG_LEVEL_VAR,
-                                                 DEFAULT_POLICY_VAR)
+                                                 DEFAULT_POLICY_VAR,
+                                                 KUBE_CLIENT_CERTIFICATE_VAR,
+                                                 KUBE_CLIENT_CERTIFICATE_KEY_VAR,
+                                                 KUBE_CA_CERTIFICATE_VAR
+                                               )
 from calico_kubernetes.logutils import ROOT_LOG_FORMAT, LOG_FORMAT, DOCKER_ID_ROOT_LOG_FORMAT, DOCKER_ID_LOG_FORMAT
 
 # noinspection PyUnresolvedReferences
@@ -57,6 +61,9 @@ CONFIG = {
     ETCD_AUTHORITY_VAR: "",
     LOG_LEVEL_VAR: "",
     DEFAULT_POLICY_VAR: "",
+    KUBE_CLIENT_CERTIFICATE_VAR:"",
+    KUBE_CLIENT_CERTIFICATE_KEY_VAR:"",
+    KUBE_CA_CERTIFICATE_VAR:""
 }
 
 
@@ -1338,6 +1345,9 @@ class NetworkPluginTest(unittest.TestCase):
             DEFAULT_POLICY_VAR: "none",
             CALICO_IPAM_VAR: "calico-ipam",
             LOG_LEVEL_VAR: "log-level",
+            KUBE_CLIENT_CERTIFICATE_VAR: "",
+            KUBE_CLIENT_CERTIFICATE_KEY_VAR: "",
+            KUBE_CA_CERTIFICATE_VAR: "",
         }
         # Deepcopy so that the original is not modified.
         m_read_file.return_value = copy.deepcopy(file_resp)
@@ -1362,6 +1372,9 @@ class NetworkPluginTest(unittest.TestCase):
             ETCD_AUTHORITY_VAR: "",
             KUBE_AUTH_TOKEN_VAR: "",
             KUBE_API_ROOT_VAR: "",
+            KUBE_CLIENT_CERTIFICATE_VAR: "",
+            KUBE_CLIENT_CERTIFICATE_KEY_VAR: "",
+            KUBE_CA_CERTIFICATE_VAR: "",
             DEFAULT_POLICY_VAR: "",
             CALICO_IPAM_VAR: "",
             LOG_LEVEL_VAR: "",
@@ -1390,6 +1403,9 @@ class NetworkPluginTest(unittest.TestCase):
             DEFAULT_POLICY_VAR: "none",
             CALICO_IPAM_VAR: "ipam",
             LOG_LEVEL_VAR: "DEBUG",
+            KUBE_CLIENT_CERTIFICATE_VAR: "",
+            KUBE_CLIENT_CERTIFICATE_KEY_VAR: "",
+            KUBE_CA_CERTIFICATE_VAR: "",
         }
         assert_equal(config, expected_resp)
 
@@ -1416,6 +1432,9 @@ class NetworkPluginTest(unittest.TestCase):
             DEFAULT_POLICY_VAR: "default",
             CALICO_IPAM_VAR: "default",
             LOG_LEVEL_VAR: "default",
+            KUBE_CLIENT_CERTIFICATE_VAR: "default",
+            KUBE_CLIENT_CERTIFICATE_KEY_VAR: "default",
+            KUBE_CA_CERTIFICATE_VAR: "default",
         }
         assert_equal(config, expected)
 
@@ -1449,6 +1468,9 @@ class NetworkPluginTest(unittest.TestCase):
             DEFAULT_POLICY_VAR: "allow",
             KUBE_AUTH_TOKEN_VAR: None,
             LOG_LEVEL_VAR: "INFO",
+            KUBE_CLIENT_CERTIFICATE_VAR: None,
+            KUBE_CLIENT_CERTIFICATE_KEY_VAR: None,
+            KUBE_CA_CERTIFICATE_VAR: None,
         }
 
         # Call method under test

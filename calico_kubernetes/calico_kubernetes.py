@@ -65,6 +65,9 @@ KUBE_AUTH_TOKEN_VAR = "KUBE_AUTH_TOKEN"
 KUBE_API_ROOT_VAR = "KUBE_API_ROOT"
 CALICO_IPAM_VAR = "CALICO_IPAM"
 DEFAULT_POLICY_VAR = "DEFAULT_POLICY"
+KUBE_CLIENT_CERTIFICATE_VAR = "KUBE_CLIENT_CERTIFICATE"
+KUBE_CLIENT_CERTIFICATE_KEY_VAR = "KUBE_CLIENT_CERTIFICATE_KEY"
+KUBE_CA_CERTIFICATE_VAR = "KUBE_CA_CERTIFICATE"
 
 # All environment variables used by the plugin.
 ENVIRONMENT_VARS = [ETCD_AUTHORITY_VAR,
@@ -72,7 +75,10 @@ ENVIRONMENT_VARS = [ETCD_AUTHORITY_VAR,
                     KUBE_AUTH_TOKEN_VAR,
                     KUBE_API_ROOT_VAR,
                     CALICO_IPAM_VAR,
-                    DEFAULT_POLICY_VAR]
+                    DEFAULT_POLICY_VAR,
+                    KUBE_CLIENT_CERTIFICATE_VAR,
+                    KUBE_CLIENT_CERTIFICATE_KEY_VAR,
+                    KUBE_CA_CERTIFICATE_VAR]
 
 # Valid values for DEFAULT_POLICY
 POLICY_NS_ISOLATION = "ns_isolation"
@@ -93,6 +99,9 @@ class NetworkPlugin(object):
         logger.debug("Plugin running with config: %s", config)
         self.auth_token = config[KUBE_AUTH_TOKEN_VAR]
         self.api_root = config[KUBE_API_ROOT_VAR]
+        self.client_certificate = config[KUBE_CLIENT_CERTIFICATE_VAR]
+        self.client_certificate_key = config[KUBE_CLIENT_CERTIFICATE_KEY_VAR]
+        self.ca_certificate = config[KUBE_CA_CERTIFICATE_VAR]
         self.calico_ipam = config[CALICO_IPAM_VAR].lower()
         self.default_policy = config[DEFAULT_POLICY_VAR].lower()
 
@@ -630,9 +639,17 @@ class NetworkPlugin(object):
             path = os.path.join(self.api_root,
                                 'namespaces/%s/pods/%s' % (self.namespace,
                                                            self.pod_name))
+
+
             try:
                 logger.debug('Querying API for Pod: %s', path)
-                response = session.get(path, verify=False)
+                
+                if (self.client_certificate and self.ca_certificate):
+                  cert=(self.client_certificate,self.client_certificate_key)
+                  response = session.get(path,cert=cert, verify=self.ca_certificate)
+                else:
+                  response = session.get(path, verify=False)
+                  
             except BaseException:
                 logger.exception("Exception hitting Kubernetes API")
                 sys.exit(1)
@@ -894,6 +911,9 @@ def read_config_file():
         DEFAULT_POLICY_VAR: "allow",
         KUBE_AUTH_TOKEN_VAR: None,
         LOG_LEVEL_VAR: "INFO",
+        KUBE_CLIENT_CERTIFICATE_VAR :None,
+        KUBE_CLIENT_CERTIFICATE_KEY_VAR: None,
+        KUBE_CA_CERTIFICATE_VAR : None
     }
     config = {}
 
