@@ -5,7 +5,7 @@
 
 # Calico Networking for Kubernetes
 ## Migration to CNI
-Calico networking for Kubernetes can now be found in the [Calico CNI repository](https://github.com/caseydavenport/calico-cni). We recommend migrating to use the Calico CNI plugin for Kubernetes deployments.  We will be updating our existing guides and documentation to use the Calico CNI plugin shortly.
+Calico networking for Kubernetes can now be found in the [Calico CNI repository](https://github.com/projectcalico/calico-cni). We recommend migrating to use the Calico CNI plugin for Kubernetes deployments.  We will be updating our existing guides and documentation to use the Calico CNI plugin shortly.
 
 ### Getting Started
 The easiest way to get started with the Calico Kubernetes plugin is by following one of our guides [in the calico-docker repository](https://github.com/projectcalico/calico-docker/tree/master/docs/kubernetes).
