@@ -640,14 +640,18 @@ class NetworkPlugin(object):
                                 'namespaces/%s/pods/%s' % (self.namespace,
                                                            self.pod_name))
 
-
             try:
                 logger.debug('Querying API for Pod: %s', path)
                 
                 if (self.client_certificate and self.ca_certificate):
+                  logger.debug('Using client certificate for Query API. CA: %s, cert: %s, key: %s', 
+                               self.ca_certificate,
+                               self.client_certificate,
+                               self.client_certificate_key)
                   cert=(self.client_certificate,self.client_certificate_key)
                   response = session.get(path,cert=cert, verify=self.ca_certificate)
                 else:
+                  logger.debug('Using direct connection for query API')
                   response = session.get(path, verify=False)
                   
             except BaseException:
@@ -911,9 +915,9 @@ def read_config_file():
         DEFAULT_POLICY_VAR: "allow",
         KUBE_AUTH_TOKEN_VAR: None,
         LOG_LEVEL_VAR: "INFO",
-        KUBE_CLIENT_CERTIFICATE_VAR :None,
+        KUBE_CLIENT_CERTIFICATE_VAR: None,
         KUBE_CLIENT_CERTIFICATE_KEY_VAR: None,
-        KUBE_CA_CERTIFICATE_VAR : None
+        KUBE_CA_CERTIFICATE_VAR: None
     }
     config = {}
 
