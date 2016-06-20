@@ -1,6 +1,6 @@
 [![CircleCI branch](https://img.shields.io/circleci/project/projectcalico/calico-kubernetes/master.svg)](https://circleci.com/gh/projectcalico/calico-kubernetes/tree/master)
 [![Coverage Status](https://coveralls.io/repos/projectcalico/calico-kubernetes/badge.svg?branch=master&service=github)](https://coveralls.io/github/projectcalico/calico-kubernetes?branch=master)
-[![Slack Status](https://calicousers-slackin.herokuapp.com/badge.svg)](https://calicousers-slackin.herokuapp.com)
+[![Slack Status](https://slack.projectcalico.org/badge.svg)](https://slack.projectcalico.org)
 [![IRC Channel](https://img.shields.io/badge/irc-%23calico-blue.svg)](https://kiwiirc.com/client/irc.freenode.net/#calico)
 
 # [DEPRECATED] Calico Exec Plugin for Kubernetes
