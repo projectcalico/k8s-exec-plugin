@@ -8,7 +8,6 @@
 Calico networking for Kubernetes can now be found in the [Calico CNI repository](https://github.com/projectcalico/calico-cni). 
 
 We recommend migrating to use the Calico CNI plugin for Kubernetes deployments.  Documentation and guides for using the
-CNI plugin with Kubernetes can be found in the [calico-containers
-repository](https://github.com/projectcalico/calico-containers/blob/master/docs/cni/kubernetes/README.md).
+CNI plugin with Kubernetes can be found in the [the Calico docs site](http://docs.projectcalico.org).
 
 [![Analytics](https://ga-beacon.appspot.com/UA-52125893-3/calico-kubernetes/README.md?pixel)](https://github.com/igrigorik/ga-beacon)
