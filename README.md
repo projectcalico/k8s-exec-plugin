@@ -5,7 +5,7 @@
 
 # [DEPRECATED] Calico Exec Plugin for Kubernetes
 ## Migration to CNI
-Calico networking for Kubernetes can now be found in the [Calico CNI repository](https://github.com/projectcalico/calico-cni). 
+Calico networking for Kubernetes can now be found in the [Calico CNI repository](http://docs.projectcalico.org). 
 
 We recommend migrating to use the Calico CNI plugin for Kubernetes deployments.  Documentation and guides for using the
 CNI plugin with Kubernetes can be found in the [calico-containers
