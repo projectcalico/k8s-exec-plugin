@@ -1,4 +1,4 @@
-# Copyright 2015 Metaswitch Networks
+# Copyright 2015 Tigera, Inc
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -139,7 +139,7 @@ class NetworkPlugin(object):
                 # is best-effort.
                 logger.exception("Error cleaning up pod")
 
-            # We've torn down, exit. 
+            # We've torn down, exit.
             logger.info("Done cleaning up")
             sys.exit(1)
         else:
@@ -173,8 +173,8 @@ class NetworkPlugin(object):
 
     def _remove_profiles(self, endpoint):
         """
-        If the pod has any profiles, delete them unless they are the 
-        default profile or have other members.  We can do this because 
+        If the pod has any profiles, delete them unless they are the
+        default profile or have other members.  We can do this because
         we create a profile per pod. Profile management for namespaces
         and service based policy will need to be done differently.
         """
@@ -185,7 +185,7 @@ class NetworkPlugin(object):
                 continue
 
             if self._datastore_client.get_profile_members(profile_id):
-                logger.info("Profile %s still has members, do not delete", 
+                logger.info("Profile %s still has members, do not delete",
                             profile_id)
                 continue
 
@@ -214,7 +214,7 @@ class NetworkPlugin(object):
                          self.namespace, self.pod_name)
             endpoint = None
         return endpoint
- 
+
     def status(self, namespace, pod_name, docker_id):
         self.namespace = namespace
         self.pod_name = pod_name
@@ -263,15 +263,15 @@ class NetworkPlugin(object):
         """
         Configure the calico profile on the given endpoint.
 
-        If DEFAULT_POLICY != none, we create a new profile for this pod and populate it 
+        If DEFAULT_POLICY != none, we create a new profile for this pod and populate it
         with the correct rules.
 
         Otherwise, the pod gets assigned to the default profile.
         """
         if self.default_policy != POLICY_NONE:
             # Determine the name for this profile.
-            profile_name = "%s_%s_%s" % (self.namespace, 
-                                         self.pod_name, 
+            profile_name = "%s_%s_%s" % (self.namespace,
+                                         self.pod_name,
                                          str(self.docker_id)[:12])
 
             # Create a new profile for this pod.
@@ -279,20 +279,20 @@ class NetworkPlugin(object):
 
             #  Retrieve pod labels, etc.
             pod = self._get_pod_config()
-    
+
             if self._datastore_client.profile_exists(profile_name):
                 # In profile-per-pod, we don't ever expect duplicate profiles.
                 logger.error("Profile '%s' already exists.", profile_name)
                 sys.exit(1)
             else:
-                # The profile doesn't exist - generate the rule set for this 
+                # The profile doesn't exist - generate the rule set for this
                 # profile, and create it.
                 rules = self._generate_rules(pod, profile_name)
                 self._datastore_client.create_profile(profile_name, rules)
-    
+
             # Add tags to the profile based on labels.
             self._apply_tags(pod, profile_name)
-    
+
             # Set the profile for the workload.
             logger.info("Setting profile '%s' on endpoint %s",
                         profile_name, endpoint.endpoint_id)
@@ -306,17 +306,17 @@ class NetworkPlugin(object):
                 # If the default profile doesn't exist, create it.
                 logger.info("Creating profile '%s'", DEFAULT_PROFILE_NAME)
                 allow = Rule(action="allow")
-                rules = Rules(id=DEFAULT_PROFILE_NAME, 
-                              inbound_rules=[allow], 
+                rules = Rules(id=DEFAULT_PROFILE_NAME,
+                              inbound_rules=[allow],
                               outbound_rules=[allow])
-                self._datastore_client.create_profile(DEFAULT_PROFILE_NAME, 
+                self._datastore_client.create_profile(DEFAULT_PROFILE_NAME,
                                                       rules)
 
             # Set the default profile on this pod's Calico endpoint.
-            logger.info("Setting profile '%s' on endpoint %s", 
+            logger.info("Setting profile '%s' on endpoint %s",
                         DEFAULT_PROFILE_NAME, endpoint.endpoint_id)
             self._datastore_client.set_profiles_on_endpoint(
-                [DEFAULT_PROFILE_NAME], 
+                [DEFAULT_PROFILE_NAME],
                 endpoint_id=endpoint.endpoint_id
             )
 
@@ -397,7 +397,7 @@ class NetworkPlugin(object):
 
         # Create the veth, move into the container namespace, add the IP and
         # set up the default routes.
-        logger.debug("Creating eth0 in network namespace with pid=%s", pid) 
+        logger.debug("Creating eth0 in network namespace with pid=%s", pid)
         ep.mac = ep.provision_veth(netns.PidNamespace(pid), "eth0")
 
         logger.debug("Setting mac address %s on endpoint %s", ep.mac, ep.name)
@@ -642,9 +642,9 @@ class NetworkPlugin(object):
 
             try:
                 logger.debug('Querying API for Pod: %s', path)
-                
+
                 if (self.client_certificate and self.ca_certificate):
-                  logger.debug('Using client certificate for Query API. CA: %s, cert: %s, key: %s', 
+                  logger.debug('Using client certificate for Query API. CA: %s, cert: %s, key: %s',
                                self.ca_certificate,
                                self.client_certificate,
                                self.client_certificate_key)
@@ -653,7 +653,7 @@ class NetworkPlugin(object):
                 else:
                   logger.debug('Using direct connection for query API')
                   response = session.get(path, verify=False)
-                  
+
             except BaseException:
                 logger.exception("Exception hitting Kubernetes API")
                 sys.exit(1)
@@ -692,7 +692,7 @@ class NetworkPlugin(object):
         Generate Rules takes human readable policy strings in annotations
         and returns a libcalico Rules object.
 
-        :return Pycalico Rules object. 
+        :return Pycalico Rules object.
         """
         # Create allow and per-namespace rules for later use.
         allow = Rule(action="allow")
@@ -857,13 +857,13 @@ def _log_interfaces(namespace):
 
 def validate_config(config):
     """
-    Validates the given configuration dictionary and exits 
+    Validates the given configuration dictionary and exits
     if an error is found.
     """
     if not config[DEFAULT_POLICY_VAR] in ALL_POLICIES:
         err = "Invalid value %s=%s, must be one of %s"
-        sys.exit(err % (DEFAULT_POLICY_VAR, 
-                        config[DEFAULT_POLICY_VAR], 
+        sys.exit(err % (DEFAULT_POLICY_VAR,
+                        config[DEFAULT_POLICY_VAR],
                         ALL_POLICIES))
 
 

@@ -1,4 +1,4 @@
-# Copyright 2015 Metaswitch Networks
+# Copyright 2015 Tigera, Inc
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -690,7 +690,7 @@ class NetworkPluginTest(unittest.TestCase):
 
         # Mock the Docker IP
         self.plugin.docker_id = "docker_id"
-        self.m_datastore_client.auto_assign_ips.return_value = [], [] 
+        self.m_datastore_client.auto_assign_ips.return_value = [], []
 
         # Run method under test
         assert_raises(SystemExit, self.plugin._assign_container_ip)
@@ -1291,7 +1291,7 @@ class NetworkPluginTest(unittest.TestCase):
         m_log.setLevel.assert_called_once_with(logging.DEBUG)
 
         # Test stdout config calls.
-        m_log.addHandler.assert_has_calls([call(f_handler), 
+        m_log.addHandler.assert_has_calls([call(f_handler),
                                            call(s_handler)])
 
     def test_filter(self):

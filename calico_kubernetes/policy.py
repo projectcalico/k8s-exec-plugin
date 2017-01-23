@@ -1,4 +1,4 @@
-# Copyright 2015 Metaswitch Networks
+# Copyright 2015 Tigera, Inc
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -135,11 +135,11 @@ class PolicyParser(object):
             """
             # Character to replace symbols
             swap_char = '_'
-    
+
             # If swap_char is in string, double it.
             unescaped_string = re.sub(swap_char, "%s%s" % (swap_char, swap_char),
                                       unescaped_string)
-    
+
             # Substitute all invalid chars.
             return re.sub('[^a-zA-Z0-9\.\_\-]', swap_char, unescaped_string)
 
